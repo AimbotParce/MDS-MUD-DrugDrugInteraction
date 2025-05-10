@@ -1,5 +1,6 @@
 #! /usr/bin/python3
 
+import json
 import logging
 import sys
 from os import listdir
@@ -136,6 +137,6 @@ for f in listdir(datadir):
                 interaction_entity_1,
                 interaction_entity_2,
                 interaction_type,
-                "\t".join(f"{k}={v}" for k, v in features.items()),
+                json.dumps(features),
                 sep="\t",
             )
