@@ -13,7 +13,7 @@ logging.basicConfig(
     level=logging.INFO,
     datefmt="%Y-%m-%d %H:%M:%S",
     handlers=[
-        logging.StreamHandler(sys.stderr),
+        # logging.StreamHandler(sys.stderr),
         logging.FileHandler("extract-features.log"),
     ],
 )
@@ -126,12 +126,11 @@ for f in listdir(datadir):
 
             features = extract_features(dependency_tree, entities, interaction_entity_1, interaction_entity_2)
             # resulting vector
-            if len(features) != 0:
-                print(
-                    sentence_id,
-                    interaction_entity_1,
-                    interaction_entity_2,
-                    interaction_type,
-                    "\t".join(f"{k}={v}" for k, v in features.items()),
-                    sep="\t",
-                )
+            print(
+                sentence_id,
+                interaction_entity_1,
+                interaction_entity_2,
+                interaction_type,
+                "\t".join(f"{k}={v}" for k, v in features.items()),
+                sep="\t",
+            )
