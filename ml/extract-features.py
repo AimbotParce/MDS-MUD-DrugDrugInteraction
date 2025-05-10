@@ -13,7 +13,7 @@ logging.basicConfig(
     level=logging.INFO,
     datefmt="%Y-%m-%d %H:%M:%S",
     handlers=[
-        # logging.StreamHandler(sys.stderr),
+        logging.StreamHandler(sys.stderr),
         logging.FileHandler("extract-features.log"),
     ],
 )
@@ -41,16 +41,21 @@ def extract_features(dependency_tree: deptree, entities: Dict[str, OffsetDict], 
                 next_non_stopword_pos_tag = dependency_tree.get_tag(j)
                 feats["in-between-lemma"] = next_non_stopword_lemma
                 feats["in-between-word"] = next_non_stopword
+                feats["in-between-pos-tag"] = next_non_stopword_pos_tag
                 feats["in-between-lemma:pos"] = next_non_stopword_lemma + "_" + next_non_stopword_pos_tag
 
             if dependency_tree.is_entity(j, entities):
                 feats["has-in-between-entity"] = True
+                feats["in-between-entity-lemma"] = dependency_tree.get_lemma(j)
 
         if not "in-between-lemma" in feats:
             logger.warning(f"Entity {entity_1} and {entity_2} don't have any non-stopword between them")
 
         # features about paths in the tree
         lcs = dependency_tree.get_LCS(node_1, node_2)
+        feats["lowest-common-ancestor-lemma"] = dependency_tree.get_lemma(lcs)
+        feats["lowest-common-ancestor-pos-tag"] = dependency_tree.get_tag(lcs)
+        feats["lowest-common-ancestor-word"] = dependency_tree.get_word(lcs)
 
         upward_path_1 = dependency_tree.get_up_path(node_1, lcs)
         upward_path_1 = "<".join(dependency_tree.get_lemma(x) + "_" + dependency_tree.get_rel(x) for x in upward_path_1)
