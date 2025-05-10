@@ -1,3 +1,17 @@
+# Cached and output data and model files
+*.joblib
+*.out
+*.stats
+*.cod
+*.cod.cl
+*.pck
+*.idx
+*.pb
+*.data-*
+*.index
+
+
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
