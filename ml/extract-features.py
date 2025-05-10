@@ -1,5 +1,6 @@
 #! /usr/bin/python3
 
+import logging
 import sys
 from os import listdir
 from typing import Dict, TypedDict
@@ -7,7 +8,16 @@ from xml.dom.minidom import parse
 
 from deptree import deptree
 
-# import patterns
+logging.basicConfig(
+    format="(%(asctime)s - %(name)s) %(levelname)s # %(message)s",
+    level=logging.INFO,
+    datefmt="%Y-%m-%d %H:%M:%S",
+    handlers=[
+        logging.StreamHandler(sys.stderr),
+        logging.FileHandler("extract-features.log"),
+    ],
+)
+logger = logging.getLogger("extract-features")
 
 OffsetDict = TypedDict("OffsetDict", {"start": int, "end": int})
 
@@ -19,46 +29,47 @@ def extract_features(dependency_tree: deptree, entities: Dict[str, OffsetDict], 
     feats: Dict[str, str] = {}
 
     # get head token for each gold entity
-    tkE1 = dependency_tree.get_fragment_head(entities[entity_1]["start"], entities[entity_1]["end"])
-    tkE2 = dependency_tree.get_fragment_head(entities[entity_2]["start"], entities[entity_2]["end"])
+    node_1 = dependency_tree.get_fragment_head(entities[entity_1]["start"], entities[entity_1]["end"])
+    node_2 = dependency_tree.get_fragment_head(entities[entity_2]["start"], entities[entity_2]["end"])
 
-    if tkE1 is not None and tkE2 is not None:
-        # features for tokens in between E1 and E2
-        # for tk in range(tkE1+1, tkE2) :
-        tk = tkE1 + 1
-        try:
-            while dependency_tree.is_stopword(tk):
-                tk += 1
-        except:
-            return {}
-        word = dependency_tree.get_word(tk)
-        lemma = dependency_tree.get_lemma(tk).lower()
-        tag = dependency_tree.get_tag(tk)
-        feats["lib"] = lemma
-        feats["wib"] = word
-        feats["lpib"] = lemma + "_" + tag
+    if node_1 is not None and node_2 is not None:
+        feats["has-in-between-entity"] = False
+        for j in range(node_1 + 1, node_2):
+            if not dependency_tree.is_stopword(j) and not "in-between-lemma" in feats:
+                next_non_stopword = dependency_tree.get_word(j)
+                next_non_stopword_lemma = dependency_tree.get_lemma(j).lower()
+                next_non_stopword_pos_tag = dependency_tree.get_tag(j)
+                feats["in-between-lemma"] = next_non_stopword_lemma
+                feats["in-between-word"] = next_non_stopword
+                feats["in-between-lemma:pos"] = next_non_stopword_lemma + "_" + next_non_stopword_pos_tag
 
-        eib = False
-        for tk in range(tkE1 + 1, tkE2):
-            if dependency_tree.is_entity(tk, entities):
-                eib = True
+            if dependency_tree.is_entity(j, entities):
+                feats["has-in-between-entity"] = True
 
-        # feature indicating the presence of an entity in between E1 and E2
-        feats["eib"] = str(eib)
+        if not "in-between-lemma" in feats:
+            logger.warning(f"Entity {entity_1} and {entity_2} don't have any non-stopword between them")
 
         # features about paths in the tree
-        lcs = dependency_tree.get_LCS(tkE1, tkE2)
+        lcs = dependency_tree.get_LCS(node_1, node_2)
 
-        path1 = dependency_tree.get_up_path(tkE1, lcs)
-        path1 = "<".join([dependency_tree.get_lemma(x) + "_" + dependency_tree.get_rel(x) for x in path1])
-        feats["path1"] = path1
+        upward_path_1 = dependency_tree.get_up_path(node_1, lcs)
+        upward_path_1 = "<".join(dependency_tree.get_lemma(x) + "_" + dependency_tree.get_rel(x) for x in upward_path_1)
+        feats["upward-path-1"] = upward_path_1
 
-        path2 = dependency_tree.get_down_path(lcs, tkE2)
-        path2 = ">".join([dependency_tree.get_lemma(x) + "_" + dependency_tree.get_rel(x) for x in path2])
-        feats["path2"] = path2
+        upward_path_2 = dependency_tree.get_down_path(lcs, node_2)
+        upward_path_2 = ">".join(dependency_tree.get_lemma(x) + "_" + dependency_tree.get_rel(x) for x in upward_path_2)
+        feats["upward-path-2"] = upward_path_2
 
-        path = path1 + "<" + dependency_tree.get_lemma(lcs) + "_" + dependency_tree.get_rel(lcs) + ">" + path2
-        feats["path"] = path
+        path = (
+            upward_path_1
+            + "<"
+            + dependency_tree.get_lemma(lcs)
+            + "_"
+            + dependency_tree.get_rel(lcs)
+            + ">"
+            + upward_path_2
+        )
+        feats["shortest-path"] = path
 
     return feats
 
