@@ -9,7 +9,7 @@ from deptree import deptree
 
 # import patterns
 
-OffsetDict = TypedDict(start=int, end=int)
+OffsetDict = TypedDict("OffsetDict", {"start": int, "end": int})
 
 ## -------------------
 ## -- Convert a pair of drugs and their context in a feature vector
