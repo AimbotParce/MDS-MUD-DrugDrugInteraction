@@ -34,11 +34,6 @@ def extract_features(dependency_tree: deptree, entities: Dict[str, OffsetDict], 
     node_2 = dependency_tree.get_fragment_head(entities[entity_2]["start"], entities[entity_2]["end"])
 
     if node_1 is not None and node_2 is not None:
-        feats["entity-1"] = dependency_tree.get_word(node_1).lower()
-        feats["entity-2"] = dependency_tree.get_word(node_2).lower()
-        feats["entity-1-lemma"] = dependency_tree.get_lemma(node_1).lower()
-        feats["entity-2-lemma"] = dependency_tree.get_lemma(node_2).lower()
-
         feats["has-more-entities-left"] = False
         feats["has-more-entities-between"] = False
         feats["has-more-entities-right"] = False
@@ -69,7 +64,6 @@ def extract_features(dependency_tree: deptree, entities: Dict[str, OffsetDict], 
             if dependency_tree.is_stopword(node):
                 continue
             feats[f"upward-path-1-lemma-{i}"] = dependency_tree.get_lemma(node)
-            feats[f"upward-path-1-word-{i}"] = dependency_tree.get_word(node).lower()
             feats[f"upward-path-1-pos-{i}"] = dependency_tree.get_tag(node)
             feats[f"upward-path-1-rel-{i}"] = dependency_tree.get_rel(node)
 
@@ -77,7 +71,6 @@ def extract_features(dependency_tree: deptree, entities: Dict[str, OffsetDict], 
             if dependency_tree.is_stopword(node):
                 continue
             feats[f"upward-path-2-lemma-{i}"] = dependency_tree.get_lemma(node)
-            feats[f"upward-path-2-word-{i}"] = dependency_tree.get_word(node).lower()
             feats[f"upward-path-2-pos-{i}"] = dependency_tree.get_tag(node)
             feats[f"upward-path-2-rel-{i}"] = dependency_tree.get_rel(node)
 
