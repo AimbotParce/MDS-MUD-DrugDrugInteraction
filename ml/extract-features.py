@@ -34,9 +34,9 @@ def extract_features(dependency_tree: deptree, entities: Dict[str, OffsetDict], 
         word = dependency_tree.get_word(tk)
         lemma = dependency_tree.get_lemma(tk).lower()
         tag = dependency_tree.get_tag(tk)
-        feats.add("lib=" + lemma)
-        feats.add("wib=" + word)
-        feats.add("lpib=" + lemma + "_" + tag)
+        feats["lib"] = lemma
+        feats["wib"] = word
+        feats["lpib"] = lemma + "_" + tag
 
         eib = False
         for tk in range(tkE1 + 1, tkE2):
@@ -44,21 +44,21 @@ def extract_features(dependency_tree: deptree, entities: Dict[str, OffsetDict], 
                 eib = True
 
         # feature indicating the presence of an entity in between E1 and E2
-        feats.add("eib=" + str(eib))
+        feats["eib"] = str(eib)
 
         # features about paths in the tree
         lcs = dependency_tree.get_LCS(tkE1, tkE2)
 
         path1 = dependency_tree.get_up_path(tkE1, lcs)
         path1 = "<".join([dependency_tree.get_lemma(x) + "_" + dependency_tree.get_rel(x) for x in path1])
-        feats.add("path1=" + path1)
+        feats["path1"] = path1
 
         path2 = dependency_tree.get_down_path(lcs, tkE2)
         path2 = ">".join([dependency_tree.get_lemma(x) + "_" + dependency_tree.get_rel(x) for x in path2])
-        feats.add("path2=" + path2)
+        feats["path2"] = path2
 
         path = path1 + "<" + dependency_tree.get_lemma(lcs) + "_" + dependency_tree.get_rel(lcs) + ">" + path2
-        feats.add("path=" + path)
+        feats["path"] = path
 
     return feats
 
