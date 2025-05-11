@@ -2,11 +2,13 @@
 
 import json
 import logging
+import os
 import sys
 from os import listdir
 from typing import Dict, TypedDict
 from xml.dom.minidom import parse
 
+import pandas as pd
 from deptree import deptree
 
 logging.basicConfig(
@@ -24,6 +26,10 @@ OffsetDict = TypedDict("OffsetDict", {"start": int, "end": int})
 
 ## -------------------
 ## -- Convert a pair of drugs and their context in a feature vector
+data_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data"))
+word_expected_information_gain = pd.read_csv(os.path.join(data_path, "word_expected_information_gain.csv"), index_col=0)
+word_expected_information_gain.sort_values(by="expected_information_gain", ascending=False, inplace=True)
+informative_words = set(w.lower() for w in word_expected_information_gain.head(100).index.tolist())
 
 
 def extract_features(dependency_tree: deptree, entities: Dict[str, OffsetDict], entity_1: str, entity_2: str):
@@ -73,6 +79,14 @@ def extract_features(dependency_tree: deptree, entities: Dict[str, OffsetDict], 
             feats[f"upward-path-2-lemma-{i}"] = dependency_tree.get_lemma(node)
             feats[f"upward-path-2-pos-{i}"] = dependency_tree.get_tag(node)
             feats[f"upward-path-2-rel-{i}"] = dependency_tree.get_rel(node)
+
+        for informative_word in informative_words:
+            feats[f"informative-word-{informative_word}"] = False
+
+        for node in dependency_tree.get_nodes():
+            lower_word = dependency_tree.get_word(node).lower()
+            if lower_word in informative_words:
+                feats[f"informative-word-{lower_word}"] = True
 
     elif node_1 is None and node_2 is None:
         logger.warning(f"Didn't find a head token for {entity_1} and {entity_2}")
