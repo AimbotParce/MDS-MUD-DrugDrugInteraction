@@ -4,9 +4,20 @@ from contextlib import redirect_stdout
 
 from codemaps import Codemaps
 from dataset import Dataset
-from keras import Input
+from keras import Input, layers
 from keras.layers import Conv1D, Dense, Embedding, Flatten
 from keras.models import Model
+
+
+def add_transformer_block(embed_dim, num_heads, ff_dim, dropout, inp):
+    x = layers.MultiHeadAttention(num_heads=num_heads, key_dim=embed_dim)(inp, inp)
+    x = layers.Dropout(dropout)(x)
+    ln1 = layers.LayerNormalization(epsilon=1e-6)(inp + x)
+    x = layers.Dense(ff_dim, activation="relu")(ln1)
+    x = layers.Dense(embed_dim)(x)
+    ffn = layers.Dropout(dropout)(x)
+    x = layers.LayerNormalization(epsilon=1e-6)(ln1 + ffn)
+    return x
 
 
 def build_network(idx):
@@ -18,14 +29,14 @@ def build_network(idx):
 
     # word input layer & embeddings
     inptW = Input(shape=(max_len,))
-    embW = Embedding(input_dim=n_words, output_dim=100, input_length=max_len, mask_zero=False)(inptW)
+    x = Embedding(input_dim=n_words, output_dim=100, input_length=max_len, mask_zero=False)(inptW)
 
-    conv = Conv1D(filters=30, kernel_size=2, strides=1, activation="relu", padding="same")(embW)
-    flat = Flatten()(conv)
+    x = add_transformer_block(embed_dim=100, num_heads=10, ff_dim=30, dropout=0.1, inp=x)
+    x = Flatten()(x)
 
-    out = Dense(n_labels, activation="softmax")(flat)
+    x = Dense(n_labels, activation="softmax")(x)
 
-    model = Model(inptW, out)
+    model = Model(inptW, x)
     model.compile(loss="categorical_crossentropy", optimizer="adam", metrics=["accuracy"])
 
     return model
