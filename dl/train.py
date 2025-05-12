@@ -5,8 +5,9 @@ from contextlib import redirect_stdout
 from codemaps import Codemaps
 from dataset import Dataset
 from keras import Input
-from keras.layers import Conv1D, Dense, Embedding, Flatten
+from keras.layers import Conv1D, Dense, Dropout, Embedding, Flatten
 from keras.models import Model
+from keras.regularizers import l1, l1_l2, l2
 
 
 def build_network(idx):
@@ -17,15 +18,22 @@ def build_network(idx):
     n_labels = codes.get_n_labels()
 
     # word input layer & embeddings
-    inptW = Input(shape=(max_len,))
-    embW = Embedding(input_dim=n_words, output_dim=100, input_length=max_len, mask_zero=False)(inptW)
+    inp = Input(shape=(max_len,))
 
-    conv = Conv1D(filters=30, kernel_size=2, strides=1, activation="relu", padding="same")(embW)
-    flat = Flatten()(conv)
+    x = Embedding(
+        input_dim=n_words, output_dim=100, input_length=max_len, mask_zero=False, embeddings_regularizer=l2(0.01)
+    )(inp)
+    x = Conv1D(filters=50, kernel_size=5, strides=1, activation="relu", padding="same")(x)
+    x = Dropout(0.5)(x)
+    x = Conv1D(filters=30, kernel_size=5, strides=1, activation="relu", padding="same")(x)
+    x = Dropout(0.2)(x)
+    x = Conv1D(filters=20, kernel_size=5, strides=1, activation="relu", padding="same")(x)
+    x = Dropout(0.2)(x)
+    x = Flatten()(x)
+    x = Dropout(0.5)(x)
+    x = Dense(n_labels, activation="softmax", kernel_regularizer=l2(0.01))(x)
 
-    out = Dense(n_labels, activation="softmax")(flat)
-
-    model = Model(inptW, out)
+    model = Model(inp, x)
     model.compile(loss="categorical_crossentropy", optimizer="adam", metrics=["accuracy"])
 
     return model
