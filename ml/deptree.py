@@ -162,6 +162,16 @@ class deptree:
                 return True
         return False
 
+    def get_entity_id(self, n: int, entities: Dict[str, OffsetDict]) -> Optional[str]:
+        """
+        Get the id of the entity to which a token belongs.
+        If the token does not belong to any entity, return None.
+        """
+        for e in entities:
+            if entities[e]["start"] <= self.tree.nodes[n]["start"] and self.tree.nodes[n]["end"] <= entities[e]["end"]:
+                return e
+        return None
+
     def get_subtree_offset_span(self, n: int) -> Tuple[int, int]:
         """
         Given a node n, get the start and end offsets of the full subtree rooted at n.
