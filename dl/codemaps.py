@@ -98,7 +98,7 @@ class Codemaps:
         self.pos_index = {}
         self.label_index = {}
 
-        with open(name + ".idx") as f:
+        with open(name) as f:
             for line in f.readlines():
                 (t, k, i) = line.split()
                 if t == "MAXLEN":
@@ -117,7 +117,7 @@ class Codemaps:
     ## ---------- Save model and indexs ---------------
     def save(self, name: str):
         # save indexes
-        with open(name + ".idx", "w") as f:
+        with open(name, "w") as f:
             print("MAXLEN", self.maxlen, "-", file=f)
             for key in self.label_index:
                 print("LABEL", key, self.label_index[key], file=f)

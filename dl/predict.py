@@ -38,7 +38,7 @@ datafile = sys.argv[2]
 outfile = sys.argv[3]
 
 model = load_model(fname)
-codes = Codemaps(fname)
+codes = Codemaps(fname + ".idx")
 
 testdata = Dataset(datafile)
 X = codes.encode_words(testdata)

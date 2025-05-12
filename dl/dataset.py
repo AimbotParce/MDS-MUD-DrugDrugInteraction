@@ -127,7 +127,7 @@ class Dataset:
         """
         Save the dataset to a pickle file.
         """
-        with open(filename + ".pck", "wb") as pf:
+        with open(filename, "wb") as pf:
             pickle.dump(self.data, pf)
 
     def sentences(self) -> Generator[SentenceDict, None, None]:

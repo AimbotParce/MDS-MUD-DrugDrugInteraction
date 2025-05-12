@@ -1,4 +1,9 @@
 #! /bin/bash
+
+set -e
+set -u
+set -o pipefail
+
 BASEDIR=..
 
 DATA=$BASEDIR/data
@@ -24,16 +29,16 @@ if [[ "$*" == *"parse"* ]]; then
 fi
 
 if [[ "$*" == *"train"* ]]; then
-    python3 train.py $CACHE/train.pck $CACHE/devel.pck $MODELS/nn
+    python3 train.py $CACHE/train.pck $CACHE/devel.pck $MODELS/nn.keras
 fi
 
 if [[ "$*" == *"predict"* ]]; then
-   python3 predict.py $MODELS/nn $CACHE/devel.pck $OUT/devel.out 
+   python3 predict.py $MODELS/nn.keras $CACHE/devel.pck $OUT/devel.out 
    python3 evaluator.py DDI $DATA/devel $OUT/devel.out | tee $OUT/devel.stats
 fi
 
 if [[ "$*" == *"test"* ]]; then
-   python3 predict.py $MODELS/nn $CACHE/test.pck $OUT/test.out 
+   python3 predict.py $MODELS/nn.keras $CACHE/test.pck $OUT/test.out 
    python3 evaluator.py DDI $DATA/test $OUT/test.out | tee $OUT/test.stats
 fi
 

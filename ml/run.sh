@@ -1,6 +1,11 @@
 #! /bin/bash
 
+set -e
+set -u
+set -o pipefail
+
 BASEDIR=..
+
 DATA=$BASEDIR/data
 CACHE=$DATA/cache
 MODELS=$DATA/models
