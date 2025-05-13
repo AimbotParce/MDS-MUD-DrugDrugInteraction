@@ -40,6 +40,10 @@ def extract_features(dependency_tree: deptree, entities: Dict[str, OffsetDict], 
     node_2 = dependency_tree.get_fragment_head(entities[entity_2]["start"], entities[entity_2]["end"])
 
     if node_1 is not None and node_2 is not None:
+
+        feats["entity-1-length"] = entities[entity_1]["end"] - entities[entity_1]["start"]
+        feats["entity-2-length"] = entities[entity_2]["end"] - entities[entity_2]["start"]
+
         feats["has-more-entities-left"] = False
         feats["has-more-entities-between"] = False
         feats["has-more-entities-right"] = False
