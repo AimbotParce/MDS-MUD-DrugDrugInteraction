@@ -9,6 +9,9 @@
 *.pb
 *.data-*
 *.index
+*.keras
+*.h5
+*.hdf5
 
 
 

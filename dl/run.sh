@@ -1,35 +1,45 @@
 #! /bin/bash
 
-BASEDIR=$(readlink -f /home/carlos/Documentos/MUD/MUD_lab/lab_resources/DDI)
+set -e
+set -u
+set -o pipefail
 
-export PYTHONPATH=$BASEDIR/util #Directory of the DDI data
+BASEDIR=..
 
+DATA=$BASEDIR/data
+CACHE=$DATA/cache
+MODELS=$DATA/models
+OUT=$DATA/out
+
+mkdir -p $CACHE
+mkdir -p $MODELS
+mkdir -p $OUT
+
+
+# Check that there are arguments
+if [ $# -eq 0 ]; then
+    echo "Usage: $0 [parse|train|predict|test]"
+    exit 1
+fi
 
 if [[ "$*" == *"parse"* ]]; then
-   $BASEDIR/util/corenlp-server.sh -quiet true -port 9000 -timeout 15000 &
-   sleep 1
-
-   python3 parse_data.py $BASEDIR/data/train train.pck
-   python3 parse_data.py $BASEDIR/data/devel devel.pck
-   python3 parse_data.py $BASEDIR/data/test  test
-   kill `cat /tmp/corenlp-server.running`
+   python3 parse_data.py $DATA/train $CACHE/train.pck
+   python3 parse_data.py $DATA/devel $CACHE/devel.pck
+   python3 parse_data.py $DATA/test  $CACHE/test.pck
 fi
 
 if [[ "$*" == *"train"* ]]; then
-    rm -rf model*
-    python3 train.py train.pck devel.pck model
+    python3 train.py $CACHE/train.pck $CACHE/devel.pck $MODELS/nn.keras
 fi
 
 if [[ "$*" == *"predict"* ]]; then
-   rm -f devel.stats devel.out
-   python3 predict.py model devel.pck devel.out 
-   python3 $BASEDIR/util/evaluator.py DDI $BASEDIR/data/devel devel.out | tee devel.stats
+   python3 predict.py $MODELS/nn.keras $CACHE/devel.pck $OUT/devel.out 
+   python3 evaluator.py DDI $DATA/devel $OUT/devel.out | tee $OUT/devel.stats
 fi
 
 if [[ "$*" == *"test"* ]]; then
-   rm -f test.stats test.out
-   python3 predict.py model test.pck test.out 
-   python3 $BASEDIR/util/evaluator.py DDI $BASEDIR/data/test test.out | tee test.stats
+   python3 predict.py $MODELS/nn.keras $CACHE/test.pck $OUT/test.out 
+   python3 evaluator.py DDI $DATA/test $OUT/test.out | tee $OUT/test.stats
 fi
 
 
