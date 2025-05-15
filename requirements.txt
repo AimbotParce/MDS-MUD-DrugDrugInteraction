@@ -1,6 +1,8 @@
+tf-keras
 scikit-learn
 nltk
 joblib
 requests
 transformers
 torch
+accelerate>=0.26.0

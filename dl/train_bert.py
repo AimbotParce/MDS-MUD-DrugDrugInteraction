@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Fine-tune BERT for Drug-Drug Interaction (DDI) classification.
 Usage:
@@ -6,6 +5,7 @@ Usage:
 Example:
   python train_bert.py ../data/train ../data/devel model_bert --model_name bert-base-uncased --epochs 3 --batch_size 16
 """
+
 import os
 import argparse
 import json
@@ -135,11 +135,12 @@ def main():
         num_train_epochs=args.epochs,
         per_device_train_batch_size=args.batch_size,
         per_device_eval_batch_size=args.batch_size,
-        evaluation_strategy="epoch",
+        # evaluation_strategy="epoch",
         save_strategy="epoch",
         logging_dir=os.path.join(args.output_dir, "logs"),
         load_best_model_at_end=True,
         metric_for_best_model="accuracy",
+        fp16=True,
     )
 
     # simple accuracy metric
