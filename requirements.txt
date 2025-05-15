@@ -2,3 +2,5 @@ scikit-learn
 nltk
 joblib
 requests
+transformers
+torch
