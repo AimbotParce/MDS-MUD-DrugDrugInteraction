@@ -2,11 +2,13 @@
 
 import json
 import logging
+import os
 import sys
 from os import listdir
 from typing import Dict, TypedDict
 from xml.dom.minidom import parse
 
+import pandas as pd
 from deptree import deptree
 
 logging.basicConfig(
@@ -24,6 +26,10 @@ OffsetDict = TypedDict("OffsetDict", {"start": int, "end": int})
 
 ## -------------------
 ## -- Convert a pair of drugs and their context in a feature vector
+data_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data"))
+word_expected_information_gain = pd.read_csv(os.path.join(data_path, "word_expected_information_gain.csv"), index_col=0)
+word_expected_information_gain.sort_values(by="expected_information_gain", ascending=False, inplace=True)
+informative_words = set(w.lower() for w in word_expected_information_gain.head(100).index.tolist())
 
 
 def extract_features(dependency_tree: deptree, entities: Dict[str, OffsetDict], entity_1: str, entity_2: str):
@@ -34,43 +40,60 @@ def extract_features(dependency_tree: deptree, entities: Dict[str, OffsetDict], 
     node_2 = dependency_tree.get_fragment_head(entities[entity_2]["start"], entities[entity_2]["end"])
 
     if node_1 is not None and node_2 is not None:
-        feats["has-in-between-entity"] = False
-        for j in range(node_1 + 1, node_2):
-            if not dependency_tree.is_stopword(j) and not "in-between-lemma" in feats:
-                next_non_stopword = dependency_tree.get_word(j)
-                next_non_stopword_lemma = dependency_tree.get_lemma(j).lower()
-                next_non_stopword_pos_tag = dependency_tree.get_tag(j)
-                feats["in-between-lemma"] = next_non_stopword_lemma
-                feats["in-between-word"] = next_non_stopword
-                feats["in-between-lemma:pos"] = next_non_stopword_lemma + "_" + next_non_stopword_pos_tag
-
-            if dependency_tree.is_entity(j, entities):
-                feats["has-in-between-entity"] = True
-
-        if not "in-between-lemma" in feats:
-            logger.warning(f"Entity {entity_1} and {entity_2} don't have any non-stopword between them")
+        feats["has-more-entities-left"] = False
+        feats["has-more-entities-between"] = False
+        feats["has-more-entities-right"] = False
+        feats["has-more-entities"] = False
+        if len(entities) > 2:
+            feats["has-more-entities"] = True
+            for j in dependency_tree.get_nodes():
+                if j != node_1 and j != node_2 and dependency_tree.is_entity(j, entities):
+                    if j < node_1:
+                        feats["has-more-entities-left"] = True
+                    elif j > node_2:
+                        feats["has-more-entities-right"] = True
+                    else:
+                        feats["has-more-entities-between"] = True
 
         # features about paths in the tree
         lcs = dependency_tree.get_LCS(node_1, node_2)
+        feats["lowest-common-ancestor-lemma"] = dependency_tree.get_lemma(lcs)
+        feats["lowest-common-ancestor-pos-tag"] = dependency_tree.get_tag(lcs)
 
         upward_path_1 = dependency_tree.get_up_path(node_1, lcs)
-        upward_path_1 = "<".join(dependency_tree.get_lemma(x) + "_" + dependency_tree.get_rel(x) for x in upward_path_1)
-        feats["upward-path-1"] = upward_path_1
+        upward_path_2 = dependency_tree.get_up_path(node_2, lcs)
 
-        upward_path_2 = dependency_tree.get_down_path(lcs, node_2)
-        upward_path_2 = ">".join(dependency_tree.get_lemma(x) + "_" + dependency_tree.get_rel(x) for x in upward_path_2)
-        feats["upward-path-2"] = upward_path_2
+        feats["depth-difference"] = abs(len(upward_path_1) - len(upward_path_2))
+        feats["shortest-path-length"] = len(upward_path_1) + len(upward_path_2) + 1
 
-        path = (
-            upward_path_1
-            + "<"
-            + dependency_tree.get_lemma(lcs)
-            + "_"
-            + dependency_tree.get_rel(lcs)
-            + ">"
-            + upward_path_2
-        )
-        feats["shortest-path"] = path
+        for i, node in enumerate(upward_path_1):
+            if dependency_tree.is_stopword(node):
+                continue
+            feats[f"upward-path-1-lemma-{i}"] = dependency_tree.get_lemma(node)
+            feats[f"upward-path-1-pos-{i}"] = dependency_tree.get_tag(node)
+            feats[f"upward-path-1-rel-{i}"] = dependency_tree.get_rel(node)
+
+        for i, node in enumerate(upward_path_2):
+            if dependency_tree.is_stopword(node):
+                continue
+            feats[f"upward-path-2-lemma-{i}"] = dependency_tree.get_lemma(node)
+            feats[f"upward-path-2-pos-{i}"] = dependency_tree.get_tag(node)
+            feats[f"upward-path-2-rel-{i}"] = dependency_tree.get_rel(node)
+
+        for informative_word in informative_words:
+            feats[f"informative-word-{informative_word}"] = False
+
+        for node in dependency_tree.get_nodes():
+            lower_word = dependency_tree.get_word(node).lower()
+            if lower_word in informative_words:
+                feats[f"informative-word-{lower_word}"] = True
+
+    elif node_1 is None and node_2 is None:
+        logger.warning(f"Didn't find a head token for {entity_1} and {entity_2}")
+    elif node_1 is None:
+        logger.warning(f"Didn't find a head token for {entity_1}")
+    elif node_2 is None:
+        logger.warning(f"Didn't find a head token for {entity_2}")
 
     return feats
 

@@ -2,4 +2,7 @@ scikit-learn
 nltk
 joblib
 requests
+pandas
+matplotlib
+seaborn
 tensorflow[and-cuda]
