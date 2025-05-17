@@ -55,7 +55,7 @@ if __name__ == "__main__":
     )
 
     # Load built-in classification search space
-    search_space = SearchSpace.from_builtin("classification_space")
+    search_space = SearchSpace.from_yaml("./custom_classification_space.yaml")
 
     # Instantiate ezAutoML
     automl = eZAutoML(
