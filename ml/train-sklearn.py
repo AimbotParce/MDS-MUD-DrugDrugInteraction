@@ -32,7 +32,7 @@ def objective(trial, X, y, classes):
         "border_count": trial.suggest_int("border_count", 32, 255),
         "grow_policy": trial.suggest_categorical("grow_policy", ["SymmetricTree", "Depthwise", "Lossguide"]),
         "boosting_type": trial.suggest_categorical("boosting_type", ["Plain", "Ordered"]),
-        "task_type": "GPU",
+        "task_type": "CPU",
         "loss_function": "MultiClass",
         "eval_metric": "MultiClass",
         "verbose": False,
@@ -43,7 +43,7 @@ def objective(trial, X, y, classes):
     # catboost can use Pool for features + labels, but sklearn cross_val_score needs matrix + labels
     # We'll just pass X and y directly
 
-    score = cross_val_score(clf, X, y, cv=3, scoring="f1_weighted").mean()
+    score = cross_val_score(clf, X, y, cv=2, scoring="f1_weighted").mean()
     return score
 
 
@@ -59,7 +59,7 @@ if __name__ == "__main__":
     X = vectorizer.fit_transform(features)
 
     study = optuna.create_study(direction="maximize")
-    study.optimize(lambda trial: objective(trial, X, y, classes), n_trials=100)
+    study.optimize(lambda trial: objective(trial, X, y, classes), n_trials=10)
 
     best_params = study.best_params
     best_params.update({
