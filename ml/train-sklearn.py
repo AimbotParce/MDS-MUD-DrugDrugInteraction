@@ -7,6 +7,7 @@ import numpy as np
 from joblib import dump
 from typing import Any, Dict, List
 from sklearn.feature_extraction import DictVectorizer
+from sklearn.preprocessing import LabelEncoder
 from sklearn.model_selection import cross_val_score
 from xgboost import XGBClassifier
 
@@ -43,6 +44,38 @@ def objective(trial, X, y, classes):
     score = cross_val_score(clf, X, y, cv=3, scoring="f1_weighted").mean()
     return score
 
+    # Optional: to re-enable tuning later
+    """
+    import optuna
+    from sklearn.model_selection import cross_val_score
+
+    def objective(trial, X, y, classes):
+        params = {
+            "objective": "multi:softprob",
+            "num_class": len(classes),
+            "eval_metric": "mlogloss",
+            "use_label_encoder": False,
+            "tree_method": "gpu_hist",
+            "max_depth": trial.suggest_int("max_depth", 3, 12),
+            "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
+            "subsample": trial.suggest_float("subsample", 0.5, 1.0),
+            "colsample_bytree": trial.suggest_float("colsample_bytree", 0.5, 1.0),
+            "gamma": trial.suggest_float("gamma", 0.0, 5.0),
+            "min_child_weight": trial.suggest_int("min_child_weight", 1, 20),
+            "reg_alpha": trial.suggest_float("reg_alpha", 0.0, 1.0),
+            "reg_lambda": trial.suggest_float("reg_lambda", 0.0, 1.0),
+            "n_estimators": trial.suggest_int("n_estimators", 50, 500),
+        }
+
+        clf = XGBClassifier(**params)
+        score = cross_val_score(clf, X, y, cv=3, scoring="f1_weighted").mean()
+        return score
+
+    study = optuna.create_study(direction="maximize")
+    study.optimize(lambda trial: objective(trial, X, y, classes), n_trials=100)
+    print("Best trial:", study.best_trial)
+    """
+
 
 if __name__ == "__main__":
     model_file = sys.argv[1]
@@ -50,25 +83,30 @@ if __name__ == "__main__":
 
     features, labels = load_data(sys.stdin)
 
-    from sklearn.preprocessing import LabelEncoder
     le = LabelEncoder()
-    y = le.fit_transform(labels)  # encode string labels to integers
-    classes = le.classes_          # original class names
+    y = le.fit_transform(labels)
+    classes = le.classes_
 
     vectorizer = DictVectorizer()
     X = vectorizer.fit_transform(features)
 
-    study = optuna.create_study(direction="maximize")
-    study.optimize(lambda trial: objective(trial, X, y, classes), n_trials=100)  # Increase trials as needed
-
-    best_params = study.best_params
-    best_params.update({
+    # Best parameters from previous Optuna run (100 trials :)
+    best_params = {
         "objective": "multi:softprob",
         "num_class": len(classes),
-        "use_label_encoder": False,
         "eval_metric": "mlogloss",
+        "use_label_encoder": False,
         "tree_method": "gpu_hist",
-    })
+        "max_depth": 9,
+        "learning_rate": 0.2999357592185179,
+        "subsample": 0.9377429874609793,
+        "colsample_bytree": 0.7704446825182671,
+        "gamma": 0.11079815139643026,
+        "min_child_weight": 1,
+        "reg_alpha": 0.6396311343627269,
+        "reg_lambda": 0.8076593772535487,
+        "n_estimators": 359,
+    }
 
     clf = XGBClassifier(**best_params)
     clf.fit(X, y)
@@ -76,4 +114,5 @@ if __name__ == "__main__":
     dump(clf, model_file)
     dump(vectorizer, vectorizer_file)
 
-    print("Best params:", best_params)
+    print("Model trained with best parameters:", best_params)
+
