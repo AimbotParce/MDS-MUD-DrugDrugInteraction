@@ -6,6 +6,9 @@ set -o pipefail
 
 BASEDIR=..
 
+./corenlp-server.sh -quiet true -port 9000 -timeout 15000  &
+sleep 2
+
 DATA=$BASEDIR/data
 CACHE=$DATA/cache
 MODELS=$DATA/models
