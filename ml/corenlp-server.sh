@@ -5,7 +5,7 @@
 # set this path to the directory where you decompressed StanfordCore
 
 # Dani posa el teu custom path :)
-STANFORDDIR=~/Desktop/College/stanford-corenlp-4.5.9
+STANFORDDIR=/home/gpu-machine/stanford-corenlp-4.5.9
 
 if [ -f /tmp/corenlp-server.running ]; then
     echo "server already running"
