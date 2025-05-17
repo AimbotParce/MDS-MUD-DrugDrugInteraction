@@ -49,8 +49,11 @@ if __name__ == "__main__":
     vectorizer_file = sys.argv[2]
 
     features, labels = load_data(sys.stdin)
-    y = np.asarray(labels)
-    classes = np.unique(y)
+
+    from sklearn.preprocessing import LabelEncoder
+    le = LabelEncoder()
+    y = le.fit_transform(labels)  # encode string labels to integers
+    classes = le.classes_          # original class names
 
     vectorizer = DictVectorizer()
     X = vectorizer.fit_transform(features)
