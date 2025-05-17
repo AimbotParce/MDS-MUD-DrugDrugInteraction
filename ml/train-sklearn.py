@@ -80,6 +80,7 @@ def objective(trial, X, y, classes):
 if __name__ == "__main__":
     model_file = sys.argv[1]
     vectorizer_file = sys.argv[2]
+    labelencoder_file = sys.argv[3]  # <--- new
 
     features, labels = load_data(sys.stdin)
 
@@ -95,7 +96,7 @@ if __name__ == "__main__":
         "objective": "multi:softprob",
         "num_class": len(classes),
         "eval_metric": "mlogloss",
-        "use_label_encoder": False,
+        "use_label_encoder": True,
         "tree_method": "gpu_hist",
         "max_depth": 9,
         "learning_rate": 0.2999357592185179,
@@ -113,6 +114,6 @@ if __name__ == "__main__":
 
     dump(clf, model_file)
     dump(vectorizer, vectorizer_file)
+    dump(le, labelencoder_file)  # <--- new
 
     print("Model trained with best parameters:", best_params)
-
