@@ -98,14 +98,29 @@ def extract_features(dependency_tree: deptree, entities: Dict[str, OffsetDict], 
 
         # Clue Verb Detection (categorized)
         advising_verbs = {
-            "advise", "recommend", "suggest", "caution", "warn", "monitor", "consider"
+            "advise", "recommend", "suggest", "caution", "warn", "monitor", "consider",
+            "encourage", "instruct", "inform", "alert", "notify", "guide", "urge",
+            "counsel", "consult", "propose", "endorse", "prescribe", "indicate",
+            "highlight", "stress", "remind", "emphasize", "note", "observe", "support",
+            "prompt", "mention", "advocate", "approve", "favor", "prefer", "acknowledge",
+            "report", "assure", "reinforce"
         }
         contraindicating_verbs = {
-            "contraindicate", "avoid", "prohibit", "prevent", "restrict", "stop", "discontinue"
+            "contraindicate", "avoid", "prohibit", "prevent", "restrict", "stop", "discontinue",
+            "cease", "withdraw", "block", "ban", "forbid", "exclude", "limit", "reduce",
+            "discourage", "impede", "counterindicate", "hinder", "proscribe", "halt",
+            "curtail", "suspend", "abolish", "terminate", "eliminate", "deny", "suppress",
+            "negate", "refuse"
         }
         interaction_verbs = {
-            "interact", "affect", "increase", "decrease", "coadminister", "combine"
-        }
+            "interact", "affect", "increase", "decrease", "coadminister", "combine",
+            "alter", "modulate", "enhance", "reduce", "potentiate", "inhibit", "induce",
+            "block", "compete", "mediate", "amplify", "attenuate", "counteract", "impair",
+            "strengthen", "synergize", "synergise", "exacerbate", "diminish", "negate",
+            "modify", "change", "influence", "impact", "regulate", "facilitate",
+            "augment", "offset", "antagonize", "antagonise", "boost", "interfere",
+            "mix", "blend"
+}
 
         feats["has-advising-verb"] = False
         feats["has-contraindicating-verb"] = False
