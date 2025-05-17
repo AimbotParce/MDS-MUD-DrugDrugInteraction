@@ -88,32 +88,6 @@ models:
   name: LogisticRegression
   tag: model_selection
   task: classification
-- constructor: KNeighborsClassifier
-  hyperparams:
-  - name: n_neighbors
-    space:
-      high: 50
-      low: 1
-      type: Integer
-  - name: weights
-    space:
-      categories:
-      - uniform
-      - distance
-      type: Categorical
-  - name: leaf_size
-    space:
-      high: 200
-      low: 10
-      type: Integer
-  - name: p
-    space:
-      high: 5
-      low: 1
-      type: Integer
-  name: KNeighborsClassifier
-  tag: model_selection
-  task: classification
 - constructor: DecisionTreeClassifier
   hyperparams:
   - name: criterion

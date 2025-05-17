@@ -1,4 +1,4 @@
-#! /bin/bash
+#!/bin/bash
 
 set -e
 set -u
@@ -17,11 +17,20 @@ mkdir -p $OUT
 
 # train model
 echo "Training model"
-python3 train-sklearn.py $MODELS/model.joblib $MODELS/vectorizer.joblib < $CACHE/train.cod.cl
+python3 train-sklearn.py \
+    $MODELS/model.joblib \
+    $MODELS/vectorizer.joblib \
+    $MODELS/labelencoder.joblib \
+    < $CACHE/train.cod.cl
+
 # run model
 echo "Running model..."
-python3 predict-sklearn.py $MODELS/model.joblib $MODELS/vectorizer.joblib < $CACHE/devel.cod > $OUT/devel.out
+python3 predict-sklearn.py \
+    $MODELS/model.joblib \
+    $MODELS/vectorizer.joblib \
+    $MODELS/labelencoder.joblib \
+    < $CACHE/devel.cod > $OUT/devel.out
+
 # evaluate results
 echo "Evaluating results..."
 python3 evaluator.py DDI $DATA/devel/ $OUT/devel.out > $OUT/devel.stats
-

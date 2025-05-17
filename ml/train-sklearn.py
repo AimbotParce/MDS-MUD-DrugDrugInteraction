@@ -26,7 +26,7 @@ def load_data(data):
 if __name__ == "__main__":
     model_file = sys.argv[1]
     vectorizer_file = sys.argv[2]
-    label_encoder_file = "label_encoder.joblib"  # You can make this a CLI argument too
+    labelencoder_file = sys.argv[3]  # <--- new
 
     # Load raw data from stdin
     features, labels = load_data(sys.stdin)
@@ -81,4 +81,4 @@ if __name__ == "__main__":
     # Save the best model, vectorizer, and label encoder
     dump(automl.best_model, model_file)
     dump(vectorizer, vectorizer_file)
-    dump(label_encoder, label_encoder_file)
+    dump(label_encoder, labelencoder_file)  # <--- new

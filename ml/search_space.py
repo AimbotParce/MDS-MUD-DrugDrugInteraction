@@ -11,7 +11,7 @@ from ezautoml.registry import constructor_registry
 # -----------------------------
 classification_model_names = [
     "RandomForestClassifier", "GradientBoostingClassifier", "LogisticRegression", 
-    "KNeighborsClassifier", "DecisionTreeClassifier",
+    "DecisionTreeClassifier",
     "AdaBoostClassifier", "BaggingClassifier", "ExtraTreesClassifier",
     "XGBClassifier", "LGBMClassifier"
 ]
@@ -66,13 +66,6 @@ def get_registered_components(model_names, task):
                 Hyperparam("C", Real(1e-2, 1e2)),  # log-scale L2 regularization
                 Hyperparam("max_iter", Integer(100, 5000)),
                 Hyperparam("penalty", Categorical(["l2"]))
-            ]
-        elif name == "KNeighborsClassifier":
-            hyperparams = [
-                Hyperparam("n_neighbors", Integer(1, 50)),  # Wider neighbor choices
-                Hyperparam("weights", Categorical(["uniform", "distance"])),
-                Hyperparam("leaf_size", Integer(10, 200)),
-                Hyperparam("p", Integer(1, 5))  # Allow Minkowski distance generalization
             ]
         elif name == "DecisionTreeClassifier":
             hyperparams = [
