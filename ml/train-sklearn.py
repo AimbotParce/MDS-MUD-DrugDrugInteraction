@@ -31,6 +31,7 @@ if __name__ == "__main__":
     classes = np.unique(y_train)
 
     v = DictVectorizer()
+    print(train_features)
     X_train = v.fit_transform(train_features)
 
     clf = MultinomialNB(alpha=0.01)
