@@ -6,8 +6,14 @@ from xml.dom.minidom import parse
 from deptree import *
 
 EntityDict = TypedDict("EntityDict", {"start": int, "end": int, "type": str})
-TokenDict = TypedDict("TokenDict", {"form": str, "lc_form": str, "lemma": str, "pos": str, "etype": Optional[str]})
-SentenceDict = TypedDict("SentenceDict", {"sid": str, "e1": str, "e2": str, "type": str, "sent": List[TokenDict]})
+TokenDict = TypedDict(
+    "TokenDict",
+    {"form": str, "lc_form": str, "lemma": str, "pos": str, "etype": Optional[str]},
+)
+SentenceDict = TypedDict(
+    "SentenceDict",
+    {"sid": str, "e1": str, "e2": str, "type": str, "sent": List[TokenDict]},
+)
 
 
 class Dataset:
@@ -27,20 +33,32 @@ class Dataset:
         Args:
             filename: Either a directory with XML files, or a pickle file.
         """
-        if os.path.splitext(filename)[1] == ".pck":  # If filename is a pickle, it must be a list of sentences already
+        if (
+            os.path.splitext(filename)[1] == ".pck"
+        ):  # If filename is a pickle, it must be a list of sentences already
             with open(filename, "rb") as pf:
                 self.data: List[SentenceDict] = pickle.load(pf)
-        elif os.path.isdir(filename):  # If filename is a directory, it must contain XML files
+        elif os.path.isdir(
+            filename
+        ):  # If filename is a directory, it must contain XML files
             self.data: List[SentenceDict] = []
             for f in os.listdir(filename):  # Process each file in directory
-                xml_tree = parse(filename + "/" + f)  # Parse XML file, obtaining a DOM tree
-                xml_sentences = xml_tree.getElementsByTagName("sentence")  # Process each sentence in the file
+                xml_tree = parse(
+                    filename + "/" + f
+                )  # Parse XML file, obtaining a DOM tree
+                xml_sentences = xml_tree.getElementsByTagName(
+                    "sentence"
+                )  # Process each sentence in the file
                 for xml_sentence in xml_sentences:
                     sentence_id = xml_sentence.attributes["id"].value  # get sentence id
-                    sentence_text = xml_sentence.attributes["text"].value  # get sentence text
+                    sentence_text = xml_sentence.attributes[
+                        "text"
+                    ].value  # get sentence text
                     xml_entities = xml_sentence.getElementsByTagName("entity")
 
-                    if len(xml_entities) <= 1:  # If there are no entity pairs, skip sentence
+                    if (
+                        len(xml_entities) <= 1
+                    ):  # If there are no entity pairs, skip sentence
                         continue
 
                     entities: Dict[str, EntityDict] = {}
@@ -49,8 +67,16 @@ class Dataset:
                         # (will not work, but there are few of them)
                         entity_id = xml_entity.attributes["id"].value
                         entity_type = xml_entity.attributes["type"].value
-                        (start, end) = xml_entity.attributes["charOffset"].value.split(";")[0].split("-")
-                        entities[entity_id] = {"start": int(start), "end": int(end), "type": entity_type}
+                        (start, end) = (
+                            xml_entity.attributes["charOffset"]
+                            .value.split(";")[0]
+                            .split("-")
+                        )
+                        entities[entity_id] = {
+                            "start": int(start),
+                            "end": int(end),
+                            "type": entity_type,
+                        }
 
                     # analyze sentence with stanford parser.
                     dependency_tree = deptree(sentence_text)
@@ -91,7 +117,7 @@ class Dataset:
                             elif entity_id == interaction_entity_2:
                                 token = {
                                     "form": "<DRUG2>",
-                                    "lc_form": "<DRUG1>",
+                                    "lc_form": "<DRUG2>",
                                     "lemma": "<DRUG2>",
                                     "pos": "<DRUG2>",
                                     "etype": entities[interaction_entity_2]["type"],
