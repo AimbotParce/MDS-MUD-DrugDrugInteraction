@@ -1,7 +1,6 @@
 import tensorflow as tf
-from tensorflow.keras import layers, Model
+from tensorflow.keras import layers, Model, mixed_precision
 from transformers import TFAutoModel, AutoTokenizer
-from tensorflow.keras.mixed_precision import experimental as mixed_precision
 
 
 class DDIBertModel:
