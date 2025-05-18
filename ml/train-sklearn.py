@@ -62,7 +62,7 @@ if __name__ == "__main__":
         search_space=search_space,
         task=TaskType.CLASSIFICATION,
         metrics=metrics,
-        max_trials=500,
+        max_trials=100,
         max_time=1000000000,
         seed=42,
         verbose=True
