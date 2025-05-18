@@ -3,3 +3,4 @@ nltk
 joblib
 requests
 tensorflow[and-cuda]
+transformers
