@@ -58,17 +58,33 @@ if __name__ == "__main__":
     vectorizer = DictVectorizer()
     X = vectorizer.fit_transform(features)
 
-    study = optuna.create_study(direction="maximize")
-    study.optimize(lambda trial: objective(trial, X, y, classes), n_trials=10)
+    #study = optuna.create_study(direction="maximize")
+    #study.optimize(lambda trial: objective(trial, X, y, classes), n_trials=10)
 
-    best_params = study.best_params
-    best_params.update({
+    #best_params = study.best_params
+    #best_params.update({
+    #    "task_type": "GPU",
+    #    "loss_function": "MultiClass",
+    #    "eval_metric": "MultiClass",
+    #    "verbose": False,
+    #    "random_seed": 42,
+    #})
+    
+    # THESE WHERE THE BEST PARAMS LOL
+    best_params = {
+        "iterations": 296,
+        "depth": 8,
+        "learning_rate": 0.2332,
+        "l2_leaf_reg": 1.8382,
+        "bagging_temperature": 0.1313,
+        "random_strength": 0.6588,
+        "border_count": 117,
         "task_type": "GPU",
         "loss_function": "MultiClass",
         "eval_metric": "MultiClass",
         "verbose": False,
         "random_seed": 42,
-    })
+    }
 
     clf = CatBoostClassifier(**best_params)
     clf.fit(X, y)
