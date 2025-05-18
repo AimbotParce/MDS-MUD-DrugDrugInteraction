@@ -1,210 +1,148 @@
-from typing import Dict, Union
+from typing import Dict, Union, List
 
 import numpy as np
-from dataset import Dataset
-from keras.preprocessing.sequence import pad_sequences
-from keras.utils import to_categorical
+from dataset import Dataset  #
+
+# from keras.preprocessing.sequence import pad_sequences # Not needed for BERT tokenization like this
+from tensorflow.keras.utils import to_categorical  # Assuming tf.keras
+from transformers import BertTokenizer
 
 
 class Codemaps:
     """
-    Class to create and manage codemaps for words, lemmas, PoS tags and labels
-    in a dataset. The codemaps are used to encode the words, lemmas, PoS tags and labels
-    as numbers when training the neural network. The codemaps are created from the training
-    data and saved to a file. The codemaps can be loaded from a file when training the
-    neural network.
+    Class to manage BERT tokenization for input sentences and encode labels.
     """
 
-    def __init__(self, data: Union[Dataset, str], maxlen: int = None):
+    def __init__(
+        self,
+        data: Union[Dataset, str],
+        maxlen: int = None,
+        bert_model_name: str = "Linglab/PharmBERT-uncased",
+    ):
         """
-        Constructor for the Codemaps class. It creates the codemaps from the training data
-        and saves them to a file. The codemaps are used to encode the words, lemmas, PoS tags
-        and labels as numbers when training the neural network. The codemaps are created from
-        the training data and saved to a file. The codemaps can be loaded from a file when
-        training the neural network.
+        Constructor for the Codemaps class.
+        If data is a Dataset object, it initializes the tokenizer and label_index.
+        If data is a string (path to saved codemaps), it loads them.
 
         Args:
-            data (Dataset | str): Either a Dataset object containing the training data or a string
-                containing the name of the file to load the codemaps from.
-            maxlen (int, optional): The maximum length of the sentences. It can only be None
-                if data is a string. If data is a Dataset object, maxlen must be an integer.
-                Defaults to None.
+            data (Dataset | str): Either a Dataset object or a path to load codemaps.
+            maxlen (int, optional): The maximum length of the tokenized sentences.
+                                    Required if data is a Dataset object.
+            bert_model_name (str): Name of the pre-trained BERT model for the tokenizer.
         """
 
         self.maxlen: int
-        self.word_index: Dict[str, int]
-        self.lc_word_index: Dict[str, int]
-        self.lemma_index: Dict[str, int]
-        self.pos_index: Dict[str, int]
         self.label_index: Dict[str, int]
+        self.tokenizer: BertTokenizer
+        self.bert_model_name: str = bert_model_name
 
         if isinstance(data, Dataset) and maxlen is not None:
-            self._create_indexes(data, maxlen)
+            self.maxlen = maxlen
+            self.tokenizer = BertTokenizer.from_pretrained(self.bert_model_name)
+            # Add special drug tokens if they are not already part of the tokenizer's vocabulary
+            # These tokens are used in your dataset.py file
+            special_tokens_dict = {
+                "additional_special_tokens": ["<DRUG1>", "<DRUG2>", "<DRUG_OTHER>"]
+            }
+            self.tokenizer.add_special_tokens(special_tokens_dict)
 
-        elif type(data) == str and maxlen is None:
+            self._create_label_index(data)
+
+        elif isinstance(data, str) and maxlen is None:  # Loading from file
             self._load_indexes(data)
+            # Initialize tokenizer after loading, bert_model_name should be saved or passed
+            # For simplicity, we'll re-initialize it here. Ideally, save/load tokenizer info.
+            self.tokenizer = BertTokenizer.from_pretrained(self.bert_model_name)
+            special_tokens_dict = {
+                "additional_special_tokens": ["<DRUG1>", "<DRUG2>", "<DRUG_OTHER>"]
+            }
+            self.tokenizer.add_special_tokens(special_tokens_dict)
 
         else:
             print("codemaps: Invalid or missing parameters in constructor")
             exit(1)
 
-    def _create_indexes(self, data: Dataset, maxlen: int):
-        """
-        Extract all words and labels in given sentences and
-        create indexes to encode them as numbers when needed
-        """
-
-        self.maxlen = maxlen
-        words = set()
-        lc_words = set()
-        lems = set()
-        pos = set()
+    def _create_label_index(self, data: Dataset):
         labels = set()
-
         for s in data.sentences():
-            for t in s["sent"]:
-                words.add(t["form"])
-                lc_words.add(t["lc_form"])
-                lems.add(t["lemma"])
-                pos.add(t["pos"])
             labels.add(s["type"])
-
-        self.word_index = {w: i + 2 for i, w in enumerate(sorted(list(words)))}
-        self.word_index["PAD"] = 0  # Padding
-        self.word_index["UNK"] = 1  # Unknown words
-
-        self.lc_word_index = {w: i + 2 for i, w in enumerate(sorted(list(lc_words)))}
-        self.lc_word_index["PAD"] = 0  # Padding
-        self.lc_word_index["UNK"] = 1  # Unknown words
-
-        self.lemma_index = {s: i + 2 for i, s in enumerate(sorted(list(lems)))}
-        self.lemma_index["PAD"] = 0  # Padding
-        self.lemma_index["UNK"] = 1  # Unseen lemmas
-
-        self.pos_index = {s: i + 2 for i, s in enumerate(sorted(list(pos)))}
-        self.pos_index["PAD"] = 0  # Padding
-        self.pos_index["UNK"] = 1  # Unseen PoS tags
-
         self.label_index = {t: i for i, t in enumerate(sorted(list(labels)))}
 
-    def _load_indexes(self, name):
+    def _load_indexes(self, name: str):
         """
-        Load indexes from file
+        Load maxlen and label_index from file.
+        Tokenizer is re-initialized based on self.bert_model_name.
         """
         self.maxlen = 0
-        self.word_index = {}
-        self.lc_word_index = {}
-        self.lemma_index = {}
-        self.pos_index = {}
         self.label_index = {}
+
+        # Try to load bert_model_name if saved, otherwise use default
+        temp_bert_model_name = self.bert_model_name
 
         with open(name) as f:
             for line in f.readlines():
-                (t, k, i) = line.split()
+                parts = line.strip().split()
+                if not parts:
+                    continue
+
+                t = parts[0]
+                k = parts[1]
+
                 if t == "MAXLEN":
                     self.maxlen = int(k)
-                elif t == "WORD":
-                    self.word_index[k] = int(i)
-                elif t == "LCWORD":
-                    self.lc_word_index[k] = int(i)
-                elif t == "LEMMA":
-                    self.lemma_index[k] = int(i)
-                elif t == "POS":
-                    self.pos_index[k] = int(i)
                 elif t == "LABEL":
-                    self.label_index[k] = int(i)
+                    self.label_index[k] = int(parts[2])
+                elif t == "BERT_MODEL_NAME":
+                    temp_bert_model_name = k
 
-    ## ---------- Save model and indexs ---------------
+        self.bert_model_name = temp_bert_model_name
+
     def save(self, name: str):
-        # save indexes
+        # save maxlen and label_index
         with open(name, "w") as f:
             print("MAXLEN", self.maxlen, "-", file=f)
+            print(
+                "BERT_MODEL_NAME", self.bert_model_name, "-", file=f
+            )  # Save model name
             for key in self.label_index:
                 print("LABEL", key, self.label_index[key], file=f)
-            for key in self.word_index:
-                print("WORD", key, self.word_index[key], file=f)
-            for key in self.lc_word_index:
-                print("LCWORD", key, self.lc_word_index[key], file=f)
-            for key in self.lemma_index:
-                print("LEMMA", key, self.lemma_index[key], file=f)
-            for key in self.pos_index:
-                print("POS", key, self.pos_index[key], file=f)
 
-    @staticmethod
-    def _get_code(index: Dict[str, int], k: str):
+    def encode_texts(self, data: Dataset):
         """
-        Get code for key k in given index, or code for unknown if not found
+        Encode sentences from data using the BERT tokenizer.
+        Returns a dictionary of input_ids and attention_mask.
         """
-        return index[k] if k in index else index["UNK"]
+        sentences = [
+            " ".join([token["form"] for token in s["sent"]]) for s in data.sentences()
+        ]
 
-    def _encode_and_pad(self, data: Dataset, index: Dict[str, int], key: str):
-        """
-        Encode and pad all sequences of given key (form, lemma, etc)
-        """
-        X = [[self._get_code(index, w[key]) for w in s["sent"]] for s in data.sentences()]
-        X = pad_sequences(maxlen=self.maxlen, sequences=X, padding="post", value=index["PAD"])
-        return X
+        encoded_inputs = self.tokenizer.batch_encode_plus(
+            sentences,
+            add_special_tokens=True,
+            max_length=self.maxlen,
+            padding="max_length",  # or True
+            truncation=True,
+            return_attention_mask=True,
+            return_tensors="tf",  # Return TensorFlow tensors
+        )
+        return {
+            "input_ids": encoded_inputs["input_ids"],
+            "attention_mask": encoded_inputs["attention_mask"],
+        }
 
-    def encode_words(self, data: Dataset):
-        """
-        Encode X from given data
-        """
+    def encode_labels(self, data: Dataset):  #
+        Y = [self.label_index[s["type"]] for s in data.sentences()]  #
+        Y = [to_categorical(i, num_classes=self.get_n_labels()) for i in Y]  #
+        return np.array(Y)  #
 
-        # encode and pad sentence words
-        Xw = self._encode_and_pad(data, self.word_index, "form")
-        # encode and pad sentence lc_words
-        Xlw = self._encode_and_pad(data, self.lc_word_index, "lc_form")
-        # encode and pad lemmas
-        Xl = self._encode_and_pad(data, self.lemma_index, "lemma")
-        # encode and pad PoS
-        Xp = self._encode_and_pad(data, self.pos_index, "pos")
+    def get_n_labels(self):  #
+        return len(self.label_index)  #
 
-        # return encoded sequences
-        # return [Xw,Xlw,Xl,Xp] (or just the subset expected by the NN inputs)
-        return Xw
+    def label2idx(self, l: str):  #
+        return self.label_index[l]  #
 
-    ## --------- encode Y from given data -----------
-    def encode_labels(self, data: Dataset):
-        # encode and pad sentence labels
-        Y = [self.label_index[s["type"]] for s in data.sentences()]
-        Y = [to_categorical(i, num_classes=self.get_n_labels()) for i in Y]
-        return np.array(Y)
-
-    ## -------- get word index size ---------
-    def get_n_words(self):
-        return len(self.word_index)
-
-    ## -------- get word index size ---------
-    def get_n_lc_words(self):
-        return len(self.lc_word_index)
-
-    ## -------- get label index size ---------
-    def get_n_labels(self):
-        return len(self.label_index)
-
-    ## -------- get label index size ---------
-    def get_n_lemmas(self):
-        return len(self.lemma_index)
-
-    ## -------- get label index size ---------
-    def get_n_pos(self):
-        return len(self.pos_index)
-
-    ## -------- get index for given word ---------
-    def word2idx(self, w: str):
-        return self.word_index[w]
-
-    ## -------- get index for given word ---------
-    def lcword2idx(self, w: str):
-        return self.lc_word_index[w]
-
-    ## -------- get index for given label --------
-    def label2idx(self, l: str):
-        return self.label_index[l]
-
-    ## -------- get label name for given index --------
-    def idx2label(self, i: int):
-        for l in self.label_index:
-            if self.label_index[l] == i:
-                return l
-        raise KeyError
+    def idx2label(self, i: int):  #
+        for l_key, l_val in self.label_index.items():  #
+            if l_val == i:  #
+                return l_key  #
+        raise KeyError(f"Index {i} not found in label_index")
