@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 #!/usr/bin/env python3
 import sys
 import os
@@ -5,6 +6,7 @@ import argparse  # For command-line arguments
 import torch
 from torch.utils.data import Dataset as TorchDataset, DataLoader
 from transformers import AutoTokenizer, AutoConfig  # Added AutoConfig
+from tqdm import tqdm  # For progress bar during prediction
 
 from codemaps import Codemaps
 from dataset import Dataset as RawDataset
@@ -117,37 +119,40 @@ def main():
     print(f"Using device: {device}", file=sys.stderr)
 
     # 1. Load Codemaps
-    # The .idx file is saved directly with model_name as prefix by train.py
     codemaps_path = args.model_dir + ".idx"
     if not os.path.exists(codemaps_path):
-        # Fallback: try looking for .idx inside model_dir if model_dir was given without .idx suffix
-        # e.g. if model_name in train was "my_model" and model_dir here is "my_model"
-        # then codes.save("my_model.idx")
-        # if model_name in train was "output_models/my_model", then codes.save("output_models/my_model.idx")
-        # This heuristic might be needed if the user provides just the directory.
-        # For now, assume model_dir is the prefix used for .idx
-        alt_codemaps_path = os.path.join(
-            args.model_dir, os.path.basename(args.model_dir) + ".idx"
+        # Attempt to find codemaps if model_dir is a directory and .idx is inside or named differently
+        # This part can be made more robust if needed, for now, simple check.
+        print(
+            f"Warning: Codemaps not found at {codemaps_path}. Trying alternative paths or expecting it inside model_dir.",
+            file=sys.stderr,
         )
+        # Example: check for model_dir/codes.idx if model_dir is a directory
+        alt_codemaps_path = os.path.join(
+            args.model_dir, "codes.idx"
+        )  # A common alternative if saved inside
         if os.path.exists(alt_codemaps_path):
             codemaps_path = alt_codemaps_path
-        else:  # Try common pattern if model_dir is a directory and idx file is inside with a fixed name like 'codes.idx'
-            fixed_name_codemaps_path = os.path.join(
-                args.model_dir, "codes.idx"
-            )  # Or whatever train.py might save
-            # The train.py saves it as `out_dir + ".idx"`. So if out_dir is "my_model_directory", it's "my_model_directory.idx"
-            # This means the user should pass "my_model_directory" as model_dir, and we append ".idx"
-            # The current train.py saves codes as: codes.save(out_dir + ".idx")
-            # So if out_dir = "ddi_bert_cnn_model", it saves "ddi_bert_cnn_model.idx"
-            # The predict script's model_dir should be "ddi_bert_cnn_model"
-            pass  # codemaps_path is already model_dir + ".idx" which is correct.
+        else:  # Try os.path.basename(args.model_dir) + ".idx" inside args.model_dir
+            base_name_idx_path = os.path.join(
+                args.model_dir, os.path.basename(args.model_dir.rstrip("/\\")) + ".idx"
+            )
+            if os.path.exists(base_name_idx_path):
+                codemaps_path = base_name_idx_path
+            else:
+                print(
+                    f"Error: Codemaps file not found at expected paths: {args.model_dir + '.idx'} or common alternatives.",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
 
     print(f"Loading codemaps from: {codemaps_path}", file=sys.stderr)
-    codes = Codemaps(codemaps_path)  # Loads from file because maxlen is None
+    codes = Codemaps(codemaps_path)
     num_labels = codes.get_n_labels()
-    max_len_from_codes = codes.maxlen  # Get max_len from saved codemaps
+    max_len_from_codes = codes.maxlen
 
     # 2. Load Tokenizer
+    # The tokenizer should be saved in args.model_dir by train.py
     print(f"Loading tokenizer from: {args.model_dir}", file=sys.stderr)
     try:
         tokenizer = AutoTokenizer.from_pretrained(args.model_dir)
@@ -161,7 +166,6 @@ def main():
         sys.exit(1)
 
     # 3. Instantiate Model
-    # Get bert_hidden_size from the config of the base BERT model
     try:
         bert_config = AutoConfig.from_pretrained(args.bert_model_name)
         bert_hidden_size = bert_config.hidden_size
@@ -170,8 +174,7 @@ def main():
             f"Error loading BERT config for {args.bert_model_name} to get hidden_size: {e}",
             file=sys.stderr,
         )
-        # Fallback or error
-        bert_hidden_size = 768  # Default for BERT-base, but risky
+        bert_hidden_size = 768
         print(
             f"Warning: Could not determine bert_hidden_size automatically. Assuming {bert_hidden_size}.",
             file=sys.stderr,
@@ -185,22 +188,28 @@ def main():
 
     print(f"Instantiating BERT_CNN with head_type='{args.head_type}'", file=sys.stderr)
     model = BERT_CNN(
-        pretrained_model_name=args.bert_model_name,  # Base model for structure
+        pretrained_model_name=args.bert_model_name,
         num_labels=num_labels,
-        # dropout_rate is part of the saved state_dict, so not needed here for instantiation if loaded correctly
         head_type=args.head_type,
         bert_hidden_size=bert_hidden_size,
         cnn_out_channels=args.cnn_out_channels,
         cnn_kernel_sizes=cnn_kernel_sizes_list,
     )
 
+    # ** CRITICAL STEP ** : Resize token embeddings to match the loaded tokenizer
+    # This must be done BEFORE loading the state_dict if special tokens were added during training
+    model.bert.resize_token_embeddings(len(tokenizer))
+    print(
+        f"Resized BERT token embeddings to: {len(tokenizer)} to match loaded tokenizer.",
+        file=sys.stderr,
+    )
+
     # 4. Load Saved State Dictionary
-    # The train.py saves it as "model_state_dict.pt" inside the model_dir
     model_state_path = os.path.join(args.model_dir, "model_state_dict.pt")
     print(f"Loading model state from: {model_state_path}", file=sys.stderr)
     try:
         state_dict = torch.load(model_state_path, map_location=device)
-        model.load_state_dict(state_dict)  # strict=True by default
+        model.load_state_dict(state_dict)
     except Exception as e:
         print(
             f"Error loading model state_dict from {model_state_path}: {e}",
@@ -218,7 +227,6 @@ def main():
     # 5. Prepare Dataset and DataLoader
     print(f"Loading and preparing dataset from: {args.datafile}", file=sys.stderr)
     raw_dataset_to_predict = RawDataset(args.datafile)
-    # Use max_len from the codemaps used during training
     predict_dataset = DDIPredictDataset(
         raw_dataset_to_predict, tokenizer, max_len_from_codes
     )
@@ -226,7 +234,7 @@ def main():
 
     # 6. Prediction Loop
     print("Starting prediction...", file=sys.stderr)
-    all_predictions_for_output = []  # To store dicts for output_interactions
+    all_predictions_for_output = []
 
     with torch.no_grad(), open(args.outfile, "w") as outfile_handle:
         for batch in tqdm(predict_loader, desc="Predicting", unit="batch"):
@@ -236,20 +244,16 @@ def main():
             logits = model(ids, mask)
             batch_preds_indices = torch.argmax(logits, dim=1).cpu().tolist()
 
-            # Store predictions with their original info for output
             for i, pred_idx in enumerate(batch_preds_indices):
                 all_predictions_for_output.append(
                     {
-                        "sid": batch["sid"][
-                            i
-                        ],  # Assuming DDIPredictDataset returns these
+                        "sid": batch["sid"][i],
                         "e1": batch["e1"][i],
                         "e2": batch["e2"][i],
                         "predicted_label_str": codes.idx2label(pred_idx),
                     }
                 )
 
-        # Write all collected predictions to file
         output_interactions(all_predictions_for_output, codes, outfile_handle)
 
     print(f"Predictions saved to {args.outfile}", file=sys.stderr)
