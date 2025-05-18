@@ -1,0 +1,9 @@
+scikit-learn
+nltk
+joblib
+requests
+catboost
+xgboost
+lightgbm 
+optuna
+imbalanced-learn

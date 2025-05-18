@@ -6,9 +6,6 @@ set -o pipefail
 
 BASEDIR=..
 
-./corenlp-server.sh -quiet true -port 9000 -timeout 15000  &
-sleep 2
-
 DATA=$BASEDIR/data
 CACHE=$DATA/cache
 MODELS=$DATA/models
@@ -17,11 +14,6 @@ OUT=$DATA/out
 mkdir -p $CACHE
 mkdir -p $MODELS
 mkdir -p $OUT
-
-# extract features
-echo "Extracting features"
-python3 extract-features.py $DATA/devel/ > $CACHE/devel.cod &
-python3 extract-features.py $DATA/train/ | tee $CACHE/train.cod | cut -f4- > $CACHE/train.cod.cl
 
 # train model
 echo "Training model"
