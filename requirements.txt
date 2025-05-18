@@ -2,6 +2,8 @@ scikit-learn
 nltk
 joblib
 requests
-tensorflow[and-cuda]>=2.6.0,<2.13.0
+tensorflow[and-cuda]
 transformers
+tf-keras
+torch
 

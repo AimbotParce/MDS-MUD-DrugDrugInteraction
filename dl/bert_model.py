@@ -32,7 +32,7 @@ class DDIBertModel:
         )
 
         # Load PharmBERT model
-        bert_model = TFAutoModel.from_pretrained(self.bert_model_name)
+        bert_model = TFAutoModel.from_pretrained(self.bert_model_name, from_pt=True)
         bert_model.resize_token_embeddings(len(self.tokenizer))
 
         # Get BERT embeddings

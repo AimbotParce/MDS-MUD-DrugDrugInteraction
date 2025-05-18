@@ -17,7 +17,7 @@ from bert_dataset import BERTDataset
 
 def build_bert_network(codes):
     bert_model_handler = DDIBertModel(
-        bert_model_name="Lianglab/PharmBERT",
+        bert_model_name="Lianglab/PharmBERT-uncased",
         max_length=codes.maxlen,
         num_labels=codes.get_n_labels(),
     )
