@@ -2,10 +2,12 @@
 
 import sys
 from os import system
+import json
 
 from codemaps import *
 from dataset import *
 from keras.models import Model, load_model
+import numpy as np
 
 from transformers import AutoTokenizer
 from bert_model import DDIBertModel
@@ -63,7 +65,7 @@ if is_bert_model:
         texts,
         padding="max_length",
         truncation=True,
-        max_length=200,  # Use the same max_length as in training
+        max_length=150,  # Use the same max_length as in training
         return_tensors="tf",
     )
 
@@ -74,6 +76,24 @@ if is_bert_model:
             "attention_mask": encodings["attention_mask"],
         }
     )
+
+    try:
+        with open(fname + "_bert_idx2label_map.json", "r") as f:
+            idx2label = json.load(f)
+            # JSON saves integer keys as strings, convert them back if necessary
+            idx2label = {int(k): v for k, v in idx2label.items()}
+    except FileNotFoundError:
+        print(
+            f"Error: BERT label mapping file {fname}_bert_idx2label_map.json not found."
+        )
+        # Handle error appropriately, maybe exit or fall back to Codemaps with a warning
+        sys.exit(1)
+
+    # Convert predictions to labels using the loaded BERT mapping
+    predicted_labels = [idx2label[np.argmax(pred)] for pred in predictions]
+
+    # Extract relations
+    output_interactions(testdata, predicted_labels, outfile)
 
     # Convert predictions to labels
     codes = Codemaps(fname + ".idx")

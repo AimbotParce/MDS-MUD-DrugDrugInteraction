@@ -1,6 +1,7 @@
 #! /usr/bin/python3
 import sys
 from contextlib import redirect_stdout
+import json
 
 from codemaps import Codemaps
 from dataset import Dataset
@@ -102,7 +103,15 @@ if use_bert:
 
     # Get encodings and labels
     train_encodings, train_labels, label_map = bert_train_dataset.prepare_data()
-    val_encodings, val_labels, _ = bert_val_dataset.prepare_data()
+    val_encodings, val_labels, val_label_map = bert_val_dataset.prepare_data()
+
+    # Create idx2label mapping from the label_map
+    idx2label_map = {v: k for k, v in label_map.items()}
+
+    with open(modelname + "_bert_label_map.json", "w") as f:
+        json.dump(label_map, f)
+    with open(modelname + "_bert_idx2label_map.json", "w") as f:
+        json.dump(idx2label_map, f)
 
     # Train model
     with redirect_stdout(sys.stderr):
@@ -126,6 +135,7 @@ if use_bert:
 
     # Save BERT tokenizer along with the model
     bert_handler.tokenizer.save_pretrained(modelname + "_tokenizer")
+    model.save(modelname)
 else:
     # Original CNN model code
     model = build_network(codes)
