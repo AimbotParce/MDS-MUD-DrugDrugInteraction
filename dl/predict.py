@@ -7,6 +7,9 @@ from codemaps import *
 from dataset import *
 from keras.models import Model, load_model
 
+from transformers import AutoTokenizer
+from bert_model import DDIBertModel
+
 ## --------- Entity extractor -----------
 ## -- Extract drug entities from given text and return them as
 ## -- a list of dictionaries with keys "offset", "text", and "type"
@@ -37,14 +40,56 @@ fname = sys.argv[1]
 datafile = sys.argv[2]
 outfile = sys.argv[3]
 
-model = load_model(fname)
-codes = Codemaps(fname + ".idx")
+is_bert_model = os.path.exists(fname + "_tokenizer")
 
-testdata = Dataset(datafile)
-X = codes.encode_words(testdata)
+if is_bert_model:
+    # Load BERT tokenizer
+    tokenizer = AutoTokenizer.from_pretrained(fname + "_tokenizer")
 
-Y = model.predict(X)
-Y = [codes.idx2label(np.argmax(s)) for s in Y]
+    # Load BERT model
+    model = load_model(fname)
 
-# extract relations
-output_interactions(testdata, Y, outfile)
+    # Load test data
+    testdata = Dataset(datafile)
+
+    # Process sentences
+    texts = []
+    for sentence in testdata.sentences():
+        sentence_text = " ".join([t["form"] for t in sentence["sent"]])
+        texts.append(sentence_text)
+
+    # Tokenize texts
+    encodings = tokenizer(
+        texts,
+        padding="max_length",
+        truncation=True,
+        max_length=200,  # Use the same max_length as in training
+        return_tensors="tf",
+    )
+
+    # Make predictions
+    predictions = model.predict(
+        {
+            "input_ids": encodings["input_ids"],
+            "attention_mask": encodings["attention_mask"],
+        }
+    )
+
+    # Convert predictions to labels
+    codes = Codemaps(fname + ".idx")
+    predicted_labels = [codes.idx2label(np.argmax(pred)) for pred in predictions]
+
+    # Extract relations
+    output_interactions(testdata, predicted_labels, outfile)
+else:
+    model = load_model(fname)
+    codes = Codemaps(fname + ".idx")
+
+    testdata = Dataset(datafile)
+    X = codes.encode_words(testdata)
+
+    Y = model.predict(X)
+    Y = [codes.idx2label(np.argmax(s)) for s in Y]
+
+    # extract relations
+    output_interactions(testdata, Y, outfile)

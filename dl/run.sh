@@ -28,8 +28,8 @@ if [[ "$*" == *"parse"* ]]; then
    python3 parse_data.py $DATA/test  $CACHE/test.pck
 fi
 
-if [[ "$*" == *"train"* ]]; then
-    python3 train.py $CACHE/train.pck $CACHE/devel.pck $MODELS/nn.keras
+if [[ "$*" == *"bert_train"* ]]; then
+    python3 train.py $CACHE/train.pck $CACHE/devel.pck $MODELS/bert_nn.keras
 fi
 
 if [[ "$*" == *"predict"* ]]; then
@@ -37,9 +37,11 @@ if [[ "$*" == *"predict"* ]]; then
    python3 evaluator.py DDI $DATA/devel $OUT/devel.out | tee $OUT/devel.stats
 fi
 
-if [[ "$*" == *"test"* ]]; then
-   python3 predict.py $MODELS/nn.keras $CACHE/test.pck $OUT/test.out 
-   python3 evaluator.py DDI $DATA/test $OUT/test.out | tee $OUT/test.stats
+if [[ "$*" == *"bert_test"* ]]; then
+   python3 predict.py $MODELS/bert_nn.keras $CACHE/test.pck $OUT/bert_test.out 
+   python3 evaluator.py DDI $DATA/test $OUT/bert_test.out | tee $OUT/bert_test.stats
 fi
+
+
 
 

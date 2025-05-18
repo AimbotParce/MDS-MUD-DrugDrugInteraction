@@ -8,6 +8,22 @@ from keras import Input
 from keras.layers import Conv1D, Dense, Dropout, Embedding, Flatten
 from keras.models import Model
 from keras.regularizers import l1, l1_l2, l2
+from tensorflow.keras.utils import Progbar
+
+from bert_model import DDIBertModel
+from bert_dataset import BERTDataset
+
+
+def build_bert_network(codes):
+    bert_model_handler = DDIBertModel(
+        bert_model_name="Lianglab/PharmBERT",
+        max_length=codes.maxlen,
+        num_labels=codes.get_n_labels(),
+    )
+
+    # Build and return the model
+    model = bert_model_handler.build_model()
+    return model, bert_model_handler
 
 
 def build_network(idx):
@@ -21,20 +37,32 @@ def build_network(idx):
     inp = Input(shape=(max_len,))
 
     x = Embedding(
-        input_dim=n_words, output_dim=100, input_length=max_len, mask_zero=False, embeddings_regularizer=l2(0.01)
+        input_dim=n_words,
+        output_dim=100,
+        input_length=max_len,
+        mask_zero=False,
+        embeddings_regularizer=l2(0.01),
     )(inp)
-    x = Conv1D(filters=50, kernel_size=5, strides=1, activation="relu", padding="same")(x)
+    x = Conv1D(filters=50, kernel_size=5, strides=1, activation="relu", padding="same")(
+        x
+    )
     x = Dropout(0.5)(x)
-    x = Conv1D(filters=30, kernel_size=5, strides=1, activation="relu", padding="same")(x)
+    x = Conv1D(filters=30, kernel_size=5, strides=1, activation="relu", padding="same")(
+        x
+    )
     x = Dropout(0.2)(x)
-    x = Conv1D(filters=20, kernel_size=5, strides=1, activation="relu", padding="same")(x)
+    x = Conv1D(filters=20, kernel_size=5, strides=1, activation="relu", padding="same")(
+        x
+    )
     x = Dropout(0.2)(x)
     x = Flatten()(x)
     x = Dropout(0.5)(x)
     x = Dense(n_labels, activation="softmax", kernel_regularizer=l2(0.01))(x)
 
     model = Model(inp, x)
-    model.compile(loss="categorical_crossentropy", optimizer="adam", metrics=["accuracy"])
+    model.compile(
+        loss="categorical_crossentropy", optimizer="adam", metrics=["accuracy"]
+    )
 
     return model
 
@@ -48,7 +76,6 @@ def build_network(idx):
 ## --
 ## -- Usage:  train.py ../data/Train ../data/Devel  modelname
 ## --
-
 
 # directory with files to process
 trainfile = sys.argv[1]
@@ -64,21 +91,57 @@ max_len = 150
 suf_len = 5
 codes = Codemaps(traindata, max_len)
 
-# build network
-model = build_network(codes)
-with redirect_stdout(sys.stderr):
-    model.summary()
+use_bert = True
 
-# encode datasets
-Xt = codes.encode_words(traindata)
-Yt = codes.encode_labels(traindata)
-Xv = codes.encode_words(valdata)
-Yv = codes.encode_labels(valdata)
+if use_bert:
+    model, bert_handler = build_bert_network(codes)
 
-# train model
-with redirect_stdout(sys.stderr):
-    model.fit(Xt, Yt, batch_size=32, epochs=10, validation_data=(Xv, Yv), verbose=1)
+    # Create BERT dataset
+    bert_train_dataset = BERTDataset(traindata, bert_handler.tokenizer, max_len)
+    bert_val_dataset = BERTDataset(valdata, bert_handler.tokenizer, max_len)
 
-# save model and indexes
-model.save(modelname)
-codes.save(modelname + ".idx")
+    # Get encodings and labels
+    train_encodings, train_labels, label_map = bert_train_dataset.prepare_data()
+    val_encodings, val_labels, _ = bert_val_dataset.prepare_data()
+
+    # Train model
+    with redirect_stdout(sys.stderr):
+        model.fit(
+            {
+                "input_ids": train_encodings["input_ids"],
+                "attention_mask": train_encodings["attention_mask"],
+            },
+            train_labels,
+            batch_size=96,
+            epochs=3,  # Fewer epochs for BERT
+            validation_data=(
+                {
+                    "input_ids": val_encodings["input_ids"],
+                    "attention_mask": val_encodings["attention_mask"],
+                },
+                val_labels,
+            ),
+            verbose=1,
+        )
+
+    # Save BERT tokenizer along with the model
+    bert_handler.tokenizer.save_pretrained(modelname + "_tokenizer")
+else:
+    # Original CNN model code
+    model = build_network(codes)
+    with redirect_stdout(sys.stderr):
+        model.summary()
+
+    # encode datasets
+    Xt = codes.encode_words(traindata)
+    Yt = codes.encode_labels(traindata)
+    Xv = codes.encode_words(valdata)
+    Yv = codes.encode_labels(valdata)
+
+    # train model
+    with redirect_stdout(sys.stderr):
+        model.fit(Xt, Yt, batch_size=32, epochs=10, validation_data=(Xv, Yv), verbose=1)
+
+    # save model and indexes
+    model.save(modelname)
+    codes.save(modelname + ".idx")
