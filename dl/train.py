@@ -1,3 +1,4 @@
+#!/usr/bin/env p
 #!/usr/bin/env python3
 import sys
 import os
@@ -7,7 +8,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim import AdamW
 from torch.utils.data import Dataset as TorchDataset, DataLoader
-from transformers import AutoTokenizer, AutoModel, get_linear_schedule_with_warmup
+from transformers import (
+    AutoTokenizer,
+    AutoModel,
+    get_linear_schedule_with_warmup,
+    AutoConfig,
+)
 from sklearn.utils.class_weight import compute_class_weight
 import numpy as np
 from tqdm import tqdm
@@ -23,6 +29,16 @@ class DDIDataset(TorchDataset):
         self.codes = codes
         self.tokenizer = tokenizer
         self.max_len = max_len
+        self.drug1_token_id = tokenizer.convert_tokens_to_ids("<DRUG1>")
+        self.drug2_token_id = tokenizer.convert_tokens_to_ids("<DRUG2>")
+        if (
+            self.drug1_token_id == tokenizer.unk_token_id
+            or self.drug2_token_id == tokenizer.unk_token_id
+        ):
+            tqdm.write(
+                "Warning: <DRUG1> or <DRUG2> token ID not found in tokenizer. Ensure they were added.",
+                file=sys.stderr,
+            )
 
     def __len__(self):
         return len(self.samples)
@@ -37,13 +53,38 @@ class DDIDataset(TorchDataset):
             max_length=self.max_len,
             return_tensors="pt",
         )
-        input_ids = encoded["input_ids"].squeeze(0)
+        input_ids = encoded["input_ids"].squeeze(0)  # Shape: (max_len)
         attention_mask = encoded["attention_mask"].squeeze(0)
         label = self.codes.label2idx(s["type"])
+
+        # Find positions of <DRUG1> and <DRUG2> tokens
+        # Fallback to CLS token (index 0) if not found, though they should be present.
+        drug1_pos = (input_ids == self.drug1_token_id).nonzero(as_tuple=True)[0]
+        drug2_pos = (input_ids == self.drug2_token_id).nonzero(as_tuple=True)[0]
+
+        # Use the first occurrence if multiple are found (shouldn't happen with current data prep)
+        # If a drug marker is not found, default to position 0 (CLS token) - this is a fallback.
+        # A more robust solution might involve erroring or specific handling if markers are missing.
+        pos_e1 = drug1_pos[0].item() if drug1_pos.nelement() > 0 else 0
+        pos_e2 = drug2_pos[0].item() if drug2_pos.nelement() > 0 else 0
+
+        if (
+            pos_e1 == 0 and self.drug1_token_id != tokenizer.unk_token_id
+        ):  # check if it defaulted because it wasn't found
+            # This check is imperfect if drug1_token_id could legitimately be at pos 0 AND also be the CLS token ID
+            # However, special tokens usually have distinct IDs.
+            # tqdm.write(f"Warning: <DRUG1> not found in sample: {s['sid']}. Defaulting to pos 0.", file=sys.stderr)
+            pass  # Potentially log this if it happens often
+        if pos_e2 == 0 and self.drug2_token_id != tokenizer.unk_token_id:
+            # tqdm.write(f"Warning: <DRUG2> not found in sample: {s['sid']}. Defaulting to pos 0.", file=sys.stderr)
+            pass
+
         return {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
             "label": label,
+            "pos_e1": torch.tensor(pos_e1, dtype=torch.long),
+            "pos_e2": torch.tensor(pos_e2, dtype=torch.long),
         }
 
 
@@ -53,10 +94,11 @@ class BERT_CNN(nn.Module):
         pretrained_model_name,
         num_labels,
         dropout_rate=0.3,
-        head_type="simple",  # 'simple' or 'cnn'
-        bert_hidden_size=768,  # Default for BERT base models
-        cnn_out_channels=128,  # Output channels for CNN layers
-        cnn_kernel_sizes=[3, 4, 5],  # Kernel sizes for CNN layers (example)
+        head_type="simple",
+        bert_hidden_size=768,
+        cnn_out_channels=128,
+        cnn_kernel_sizes=[3, 4, 5],
+        entity_head_hidden_dim=256,  # Hidden dim for MLP in entity_pool head
     ):
         super().__init__()
         self.bert = AutoModel.from_pretrained(pretrained_model_name)
@@ -66,10 +108,6 @@ class BERT_CNN(nn.Module):
         if self.head_type == "simple":
             self.classifier = nn.Linear(bert_hidden_size, num_labels)
         elif self.head_type == "cnn":
-            # CNN layers
-            # Input to Conv1d: (batch_size, in_channels, seq_len)
-            # BERT last_hidden_state: (batch_size, seq_len, bert_hidden_size)
-            # We permute it to (batch_size, bert_hidden_size, seq_len)
             self.convs = nn.ModuleList(
                 [
                     nn.Conv1d(
@@ -77,43 +115,37 @@ class BERT_CNN(nn.Module):
                         out_channels=cnn_out_channels,
                         kernel_size=k,
                         padding=(k - 1) // 2,
-                    )  # 'same' padding
+                    )
                     for k in cnn_kernel_sizes
                 ]
             )
-            # The output size after convs and pooling depends on the number of kernels and their out_channels
-            # If using GlobalMaxPooling, each conv layer output (after pooling) will be (batch_size, cnn_out_channels)
-            # Concatenating them will result in (batch_size, len(cnn_kernel_sizes) * cnn_out_channels)
-            # For Flatten, it's more complex. Let's use GlobalMaxPooling for simplicity and robustness here.
-            # self.flatten = nn.Flatten() # Alternative to Global Max Pooling
-
-            # Classifier for CNN head
-            # Each Conv1D will produce cnn_out_channels. If we concatenate features from multiple kernel sizes:
             self.classifier = nn.Linear(
                 len(cnn_kernel_sizes) * cnn_out_channels, num_labels
+            )
+        elif self.head_type == "entity_marker":
+            # Classifier for concatenated entity marker embeddings
+            # Each entity embedding has bert_hidden_size, so concatenated is 2 * bert_hidden_size
+            self.entity_mlp = nn.Sequential(
+                nn.Linear(2 * bert_hidden_size, entity_head_hidden_dim),
+                nn.ReLU(),
+                nn.Dropout(dropout_rate),  # Apply dropout within the MLP too
+                nn.Linear(entity_head_hidden_dim, num_labels),
             )
         else:
             raise ValueError(f"Unsupported head_type: {head_type}")
 
-    def freeze_bert_layers(self, num_layers_to_freeze=None):
-        """
-        Freezes BERT layers.
-        If num_layers_to_freeze is None, freezes all BERT parameters.
-        If num_layers_to_freeze is an int, freezes the embedding layer and the first
-        `num_layers_to_freeze` encoder layers.
-        """
-        if num_layers_to_freeze is None:  # Freeze all of BERT
+    def freeze_bert_layers(self, num_layers_to_freeze=0):
+        if num_layers_to_freeze == -1:  # Freeze all of BERT
             for param in self.bert.parameters():
                 param.requires_grad = False
             tqdm.write("Froze all BERT parameters.", file=sys.stderr)
             return
 
-        # Freeze embeddings
-        for param in self.bert.embeddings.parameters():
-            param.requires_grad = False
+        if num_layers_to_freeze > 0:  # Freeze embeddings and first N encoder layers
+            for param in self.bert.embeddings.parameters():
+                param.requires_grad = False
 
-        # Freeze specified number of encoder layers
-        if num_layers_to_freeze > 0:
+            # Freeze specified number of encoder layers
             for layer_idx in range(
                 min(num_layers_to_freeze, len(self.bert.encoder.layer))
             ):
@@ -123,49 +155,74 @@ class BERT_CNN(nn.Module):
                 f"Froze BERT embeddings and the first {min(num_layers_to_freeze, len(self.bert.encoder.layer))} encoder layers.",
                 file=sys.stderr,
             )
-        else:
+        elif num_layers_to_freeze == 0:
             tqdm.write(
-                "Froze BERT embeddings. All encoder layers are trainable.",
+                "BERT model is fully trainable (no layers frozen by this method).",
                 file=sys.stderr,
             )
 
-    def forward(self, input_ids, attention_mask):
+    def forward(self, input_ids, attention_mask, pos_e1=None, pos_e2=None):
         outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask)
 
         if self.head_type == "simple":
-            # Use pooler_output for simple classification
             pooled_output = outputs.pooler_output
-            x = self.dropout(pooled_output)
+            x = self.dropout(pooled_output)  # Apply dropout before final classification
             logits = self.classifier(x)
         elif self.head_type == "cnn":
-            # Use last_hidden_state for CNN head
+            last_hidden_state = outputs.last_hidden_state
+            x = last_hidden_state.permute(0, 2, 1)
+            conv_outputs = []
+            for conv_layer in self.convs:
+                conv_out = F.relu(conv_layer(x))
+                pooled_out = F.max_pool1d(
+                    conv_out, kernel_size=conv_out.size(2)
+                ).squeeze(2)
+                conv_outputs.append(pooled_out)
+            x = torch.cat(conv_outputs, dim=1)
+            x = self.dropout(x)  # Apply dropout before final classification
+            logits = self.classifier(x)
+        elif self.head_type == "entity_marker":
+            if pos_e1 is None or pos_e2 is None:
+                raise ValueError(
+                    "pos_e1 and pos_e2 must be provided for 'entity_marker' head type."
+                )
+
             last_hidden_state = (
                 outputs.last_hidden_state
             )  # (batch_size, seq_len, bert_hidden_size)
 
-            # Permute to (batch_size, bert_hidden_size, seq_len) for Conv1D
-            x = last_hidden_state.permute(0, 2, 1)
+            # Gather embeddings for e1 and e2 using their positions
+            # pos_e1 and pos_e2 are (batch_size), need to be (batch_size, 1, bert_hidden_size) for gather
+            # or use a loop / advanced indexing
+            batch_size = last_hidden_state.size(0)
 
-            # Apply Conv layers, ReLU, and Global Max Pooling
-            conv_outputs = []
-            for conv_layer in self.convs:
-                conv_out = F.relu(
-                    conv_layer(x)
-                )  # (batch_size, cnn_out_channels, seq_len)
-                # Global Max Pooling over the sequence length dimension
-                pooled_out = F.max_pool1d(
-                    conv_out, kernel_size=conv_out.size(2)
-                ).squeeze(
-                    2
-                )  # (batch_size, cnn_out_channels)
-                conv_outputs.append(pooled_out)
+            # Create index for gather. Shape: (batch_size, 1, bert_hidden_size)
+            # pos_e1.unsqueeze(-1) gives (batch_size, 1)
+            # .repeat(1, bert_hidden_size) would be (batch_size, bert_hidden_size)
+            # We need to select one vector of size bert_hidden_size for each item in batch
 
-            # Concatenate features from different kernel sizes
-            x = torch.cat(
-                conv_outputs, dim=1
-            )  # (batch_size, len(cnn_kernel_sizes) * cnn_out_channels)
-            x = self.dropout(x)
-            logits = self.classifier(x)
+            idx_e1 = (
+                pos_e1.unsqueeze(1).unsqueeze(2).repeat(1, 1, bert_hidden_size)
+            )  # (batch_size, 1, bert_hidden_size)
+            emb_e1 = torch.gather(last_hidden_state, 1, idx_e1).squeeze(
+                1
+            )  # (batch_size, bert_hidden_size)
+
+            idx_e2 = (
+                pos_e2.unsqueeze(1).unsqueeze(2).repeat(1, 1, bert_hidden_size)
+            )  # (batch_size, 1, bert_hidden_size)
+            emb_e2 = torch.gather(last_hidden_state, 1, idx_e2).squeeze(
+                1
+            )  # (batch_size, bert_hidden_size)
+
+            # Concatenate entity embeddings
+            concat_emb = torch.cat(
+                (emb_e1, emb_e2), dim=1
+            )  # (batch_size, 2 * bert_hidden_size)
+            # The self.dropout here is the general one. The MLP has its own internal dropout.
+            # It might be better to remove self.dropout before self.entity_mlp if MLP handles it.
+            # x = self.dropout(concat_emb) # Optional: dropout on concatenated embeddings before MLP
+            logits = self.entity_mlp(concat_emb)  # MLP for classification
 
         return logits
 
@@ -177,24 +234,24 @@ def train(args):
     train_raw = RawDataset(args.train_file)
     val_raw = RawDataset(args.val_file)
 
-    max_len = args.max_len
+    max_len = args.max_len  # Use max_len from args
+
+    bert_model_name = args.bert_model_name
+    tokenizer = AutoTokenizer.from_pretrained(bert_model_name)
+    special_tokens_dict = {
+        "additional_special_tokens": ["<DRUG1>", "<DRUG2>", "<DRUG_OTHER>"]
+    }
+    num_added_toks = tokenizer.add_special_tokens(special_tokens_dict)
+    tqdm.write(f"Added {num_added_toks} special tokens to tokenizer.", file=sys.stderr)
+
+    # Create codemaps *after* tokenizer is updated with special tokens if they affect vocab for other things
+    # However, codemaps here is mainly for labels.
     codes = Codemaps(train_raw, max_len)
     num_labels = codes.get_n_labels()
-
-    # Determine BERT model name and hidden size
-    # Using PharmBERT as a good default, can be made an argument
-    bert_model_name = "Lianglab/PharmBERT-uncased"
-    # Fetch config to get hidden_size, or assume 768 for base models
-    from transformers import AutoConfig
 
     bert_config = AutoConfig.from_pretrained(bert_model_name)
     bert_hidden_size = bert_config.hidden_size
 
-    tokenizer = AutoTokenizer.from_pretrained(bert_model_name)
-    special_tokens = ["<DRUG1>", "<DRUG2>", "<DRUG_OTHER>"]
-    tokenizer.add_special_tokens({"additional_special_tokens": special_tokens})
-
-    # Parse CNN kernel sizes from argument
     cnn_kernel_sizes_list = (
         [int(k) for k in args.cnn_kernel_sizes.split(",")]
         if args.cnn_kernel_sizes
@@ -209,16 +266,18 @@ def train(args):
         bert_hidden_size=bert_hidden_size,
         cnn_out_channels=args.cnn_out_channels,
         cnn_kernel_sizes=cnn_kernel_sizes_list,
+        entity_head_hidden_dim=args.entity_head_hidden_dim,
     )
-    model.to(device)
-    model.bert.resize_token_embeddings(len(tokenizer))
 
-    # Apply layer freezing if specified
-    if args.freeze_bert_layers is not None:
-        if args.freeze_bert_layers == -1:  # Special value to freeze all BERT
-            model.freeze_bert_layers(num_layers_to_freeze=None)
-        elif args.freeze_bert_layers >= 0:
-            model.freeze_bert_layers(num_layers_to_freeze=args.freeze_bert_layers)
+    # Resize token embeddings *after* model initialization and *before* loading any state dict (if applicable)
+    # And *after* adding special tokens to tokenizer
+    model.bert.resize_token_embeddings(len(tokenizer))
+    tqdm.write(f"Resized BERT token embeddings to: {len(tokenizer)}", file=sys.stderr)
+    model.to(device)
+
+    if args.freeze_bert_layers < -1:  # Ensure valid range
+        raise ValueError("--freeze_bert_layers cannot be less than -1.")
+    model.freeze_bert_layers(num_layers_to_freeze=args.freeze_bert_layers)
 
     train_ds = DDIDataset(train_raw, codes, tokenizer, max_len)
     val_ds = DDIDataset(val_raw, codes, tokenizer, max_len)
@@ -238,32 +297,23 @@ def train(args):
         )
         class_weights = None
     else:
-        unique_labels = np.unique(train_labels)
-        # Ensure all labels defined in codes are considered for weights array
-        all_possible_labels_indices = np.arange(num_labels)
-
-        # Compute weights only for classes present in the training data
+        unique_labels_in_data = np.unique(train_labels)
         class_weights_array = compute_class_weight(
             class_weight="balanced",
-            classes=unique_labels,  # Only provide unique labels found in data
+            classes=unique_labels_in_data,
             y=np.array(train_labels),
         )
-
-        # Map these weights to the full list of labels
-        # Initialize weights for all labels to 1.0 (or some other default)
-        final_class_weights = torch.ones(num_labels, dtype=torch.float)
-        for i, class_idx_in_data in enumerate(unique_labels):
-            # class_idx_in_data is the actual label index (e.g., 0, 1, 3 if label 2 is missing)
-            if int(class_idx_in_data) < num_labels:  # Ensure it's a valid index
+        final_class_weights = torch.ones(
+            num_labels, dtype=torch.float
+        )  # Default weight 1
+        for i, class_idx_in_data in enumerate(unique_labels_in_data):
+            if int(class_idx_in_data) < num_labels:
                 final_class_weights[int(class_idx_in_data)] = class_weights_array[i]
-
         class_weights = final_class_weights.to(device)
         tqdm.write(f"Calculated class weights: {class_weights}", file=sys.stderr)
 
     optimizer = AdamW(
-        filter(
-            lambda p: p.requires_grad, model.parameters()
-        ),  # Only pass trainable parameters
+        filter(lambda p: p.requires_grad, model.parameters()),
         lr=args.lr,
         eps=args.adam_epsilon,
         weight_decay=args.weight_decay,
@@ -296,11 +346,16 @@ def train(args):
             ids = batch["input_ids"].to(device)
             mask = batch["attention_mask"].to(device)
             labels = batch["label"].to(device)
+            pos_e1 = batch["pos_e1"].to(device)
+            pos_e2 = batch["pos_e2"].to(device)
 
             optimizer.zero_grad()
-            logits = model(ids, mask)
-            loss = criterion(logits, labels)
+            if args.head_type == "entity_marker":
+                logits = model(ids, mask, pos_e1=pos_e1, pos_e2=pos_e2)
+            else:
+                logits = model(ids, mask)  # Other heads don't need pos_e1, pos_e2
 
+            loss = criterion(logits, labels)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(
                 filter(lambda p: p.requires_grad, model.parameters()),
@@ -329,8 +384,14 @@ def train(args):
                 ids = batch["input_ids"].to(device)
                 mask = batch["attention_mask"].to(device)
                 labels = batch["label"].to(device)
+                pos_e1 = batch["pos_e1"].to(device)
+                pos_e2 = batch["pos_e2"].to(device)
 
-                logits = model(ids, mask)
+                if args.head_type == "entity_marker":
+                    logits = model(ids, mask, pos_e1=pos_e1, pos_e2=pos_e2)
+                else:
+                    logits = model(ids, mask)
+
                 val_batch_loss = criterion(logits, labels)
                 total_val_loss += val_batch_loss.item()
 
@@ -383,17 +444,8 @@ def train(args):
     out_dir = args.model_name
     os.makedirs(out_dir, exist_ok=True)
 
-    # Save only the BERT part if it was fine-tuned, or the whole model if head is custom
-    # For simplicity and to ensure the head is saved, save the whole model's state_dict.
-    # The AutoModel.save_pretrained approach is more for sharing/reloading the BERT part itself.
-
-    # To save the fine-tuned BERT base model separately (optional):
-    # model.bert.save_pretrained(os.path.join(out_dir, "bert_fine_tuned"))
-
     tokenizer.save_pretrained(out_dir)
-    torch.save(
-        model.state_dict(), os.path.join(out_dir, "model_state_dict.pt")
-    )  # Changed filename for clarity
+    torch.save(model.state_dict(), os.path.join(out_dir, "model_state_dict.pt"))
     codes.save(out_dir + ".idx")
     tqdm.write(
         f"Best model state dict, tokenizer, and codemaps saved to {out_dir}",
@@ -418,10 +470,16 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
+        "--bert_model_name",
+        type=str,
+        default="Lianglab/PharmBERT-uncased",
+        help="Base BERT model name (default: Lianglab/PharmBERT-uncased)",
+    )
+    parser.add_argument(
         "--batch_size", type=int, default=128, help="Batch size (default: 16)"
     )
     parser.add_argument(
-        "--lr", type=float, default=1e-5, help="Learning rate (default: 2e-5)"
+        "--lr", type=float, default=2e-5, help="Learning rate (default: 2e-5)"
     )
     parser.add_argument(
         "--adam_epsilon", type=float, default=1e-8, help="AdamW epsilon (default: 1e-8)"
@@ -441,8 +499,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dropout_rate",
         type=float,
-        default=0.3,
-        help="Dropout rate for classifier head (default: 0.3)",
+        default=0.5,
+        help="Dropout rate for classifier head (default: 0.5)",
     )
     parser.add_argument(
         "--warmup_steps",
@@ -473,13 +531,12 @@ if __name__ == "__main__":
         help="Early stopping min_delta (default: 0.001)",
     )
 
-    # New arguments for model architecture
     parser.add_argument(
         "--head_type",
         type=str,
         default="simple",
-        choices=["simple", "cnn"],
-        help="Type of classifier head to use on top of BERT ('simple' or 'cnn') (default: simple)",
+        choices=["simple", "cnn", "entity_marker"],
+        help="Type of classifier head ('simple', 'cnn', 'entity_marker') (default: simple)",
     )
     parser.add_argument(
         "--cnn_out_channels",
@@ -491,29 +548,26 @@ if __name__ == "__main__":
         "--cnn_kernel_sizes",
         type=str,
         default="3,4,5",
-        help="Comma-separated kernel sizes for CNN layers if head_type='cnn' (e.g., '3,4,5') (default: 3,4,5)",
+        help="Comma-separated kernel sizes for CNN layers if head_type='cnn' (default: 3,4,5)",
+    )
+    parser.add_argument(
+        "--entity_head_hidden_dim",
+        type=int,
+        default=256,
+        help="Hidden dimension for the MLP in the 'entity_marker' head (default: 256)",
     )
     parser.add_argument(
         "--freeze_bert_layers",
         type=int,
         default=0,
-        help="Number of BERT encoder layers to freeze from the bottom (embeddings always frozen if > -1). "
-        "-1 freezes all of BERT. 0 means only embeddings are frozen if specified, "
-        "but all encoder layers are trainable. (default: 0, meaning no encoder layers frozen by default beyond embeddings if any). "
-        "To make all BERT trainable (including embeddings), this should not be set or a different logic is needed. "
-        "Current logic: 0 means embeddings frozen, encoders trainable. >0 means embeddings + N encoders frozen. -1 means all BERT frozen."
-        "Let's adjust: 0 means nothing frozen. N > 0 freezes embeddings + N-1 encoders. -1 freezes all. No, this is confusing."
-        "New logic: 0 = nothing frozen. N > 0 = freeze embeddings and first N encoder layers. -1 = freeze all BERT parameters (embeddings + all encoders)."
-        "Corrected logic: freeze_bert_layers=0 means BERT is fully trainable. freeze_bert_layers=N (N>0) freezes embeddings and first N encoder layers. freeze_bert_layers=-1 freezes all BERT parameters."
-        "Revisiting freeze_bert_layers argument: 0 = no layers frozen. N > 0 = freeze embeddings and first N encoder layers. -1 = freeze all BERT params."
-        "Final decision on freeze_bert_layers: 0 = BERT fully trainable. N > 0 = freeze embeddings and first N *encoder* layers. -1 = freeze all BERT parameters (embeddings and all encoder layers)."
-        "Actually, a simpler scheme: 0 = fully trainable. N > 0 freezes the first N encoder layers *and* embeddings. -1 freezes all parameters of BERT model. For this implementation, let's use: N>=0: freeze embeddings and first N encoder layers. If N=-1, freeze all of BERT. If N is not specified (default, e.g. 0 in argparse), don't freeze beyond what the pre-trained model specifies."
-        "Let's make the default for freeze_bert_layers 0, meaning no layers are frozen by default. If the user specifies a positive number N, we freeze embeddings and the first N encoder layers. If -1, freeze all of BERT.",
+        help="Number of BERT encoder layers to freeze from the bottom (embeddings also frozen if N > 0). "
+        "0: BERT fully trainable. "
+        "N > 0: Freeze embeddings and first N encoder layers. "
+        "-1: Freeze all BERT parameters (embeddings and all encoders). (default: 0)",
     )
 
     args = parser.parse_args()
 
-    # Refined logic for freeze_bert_layers based on its new default and meaning
     if args.freeze_bert_layers < -1:
         parser.error("--freeze_bert_layers cannot be less than -1.")
 
