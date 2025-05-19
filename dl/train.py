@@ -1,3 +1,4 @@
+#!/usr/bin/
 #!/usr/bin/env python3
 import sys
 import os
@@ -18,13 +19,10 @@ import numpy as np
 from tqdm import tqdm
 import copy
 
-from codemaps import Codemaps  # Assuming this is in the same directory or Python path
-from dataset import (
-    Dataset as RawDataset,
-)  # Assuming this is in the same directory or Python path
+from codemaps import Codemaps
+from dataset import Dataset as RawDataset
 
 
-# Define new special marker tokens
 E1_START_TOKEN = "[E1_START]"
 E1_END_TOKEN = "[E1_END]"
 E2_START_TOKEN = "[E2_START]"
@@ -38,9 +36,6 @@ class DDIDataset(TorchDataset):
         self.codes = codes
         self.tokenizer = tokenizer
         self.max_len = max_len
-        # Store IDs of <DRUG1> and <DRUG2> if needed for logic, though we operate on 'form'
-        # self.drug1_placeholder = "<DRUG1>"
-        # self.drug2_placeholder = "<DRUG2>"
 
     def __len__(self):
         return len(self.samples)
@@ -51,24 +46,20 @@ class DDIDataset(TorchDataset):
             form = token_dict["form"]
             if form == "<DRUG1>":
                 new_token_list.append({"form": E1_START_TOKEN})
-                new_token_list.append(token_dict)  # Keep original <DRUG1> token dict
+                new_token_list.append(token_dict)
                 new_token_list.append({"form": E1_END_TOKEN})
             elif form == "<DRUG2>":
                 new_token_list.append({"form": E2_START_TOKEN})
-                new_token_list.append(token_dict)  # Keep original <DRUG2> token dict
+                new_token_list.append(token_dict)
                 new_token_list.append({"form": E2_END_TOKEN})
             else:
                 new_token_list.append(token_dict)
         return new_token_list
 
     def __getitem__(self, idx):
-        s = self.samples[idx]  # This is a SentenceDict
+        s = self.samples[idx]
 
-        # Insert new entity markers around <DRUG1> and <DRUG2> placeholders
-        # s['sent'] is a List[TokenDict]
         marked_token_list = self._insert_markers(s["sent"])
-
-        # Create text string from forms for the tokenizer
         text_to_tokenize = " ".join([t["form"] for t in marked_token_list])
 
         encoded = self.tokenizer(
@@ -82,46 +73,33 @@ class DDIDataset(TorchDataset):
         attention_mask = encoded["attention_mask"].squeeze(0)
         label = self.codes.label2idx(s["type"])
 
-        # For the 'entity_marker' head_type (if we were to use it), we'd need positions.
-        # But for this new strategy (inspired by external script), we use 'simple' head,
-        # relying on BERT to process the markers within the sequence.
-        # So, pos_e1 and pos_e2 are not strictly needed by the model's forward pass here.
-        # However, if any other part of the code expects them, they should be handled.
-        # For now, let's assume 'simple' head doesn't need explicit positions.
-
         return {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
             "label": label,
-            # "pos_e1": torch.tensor(0, dtype=torch.long), # Placeholder if needed elsewhere
-            # "pos_e2": torch.tensor(0, dtype=torch.long)  # Placeholder if needed elsewhere
         }
 
 
-class BERT_CNN(
-    nn.Module
-):  # Renaming to BertForDDIClassification or similar might be clearer
+class BERT_CNN(nn.Module):
     def __init__(
         self,
         pretrained_model_name,
         num_labels,
-        dropout_rate=0.3,  # Default from previous discussions
+        dropout_rate=0.3,
         head_type="simple",
         bert_hidden_size=768,
-        # CNN head params (kept for flexibility, but not used by 'simple' head)
         cnn_out_channels=128,
         cnn_kernel_sizes=[3, 4, 5],
-        # Entity Marker MLP head params (kept for flexibility)
         entity_head_hidden_dim=256,
     ):
         super().__init__()
         self.bert = AutoModel.from_pretrained(pretrained_model_name)
         self.head_type = head_type
-        self.dropout = nn.Dropout(dropout_rate)  # General dropout before classifier
+        self.dropout = nn.Dropout(dropout_rate)
 
         if self.head_type == "simple":
             self.classifier = nn.Linear(bert_hidden_size, num_labels)
-        elif self.head_type == "cnn":  # Kept for potential future use
+        elif self.head_type == "cnn":
             self.convs = nn.ModuleList(
                 [
                     nn.Conv1d(
@@ -136,7 +114,7 @@ class BERT_CNN(
             self.classifier = nn.Linear(
                 len(cnn_kernel_sizes) * cnn_out_channels, num_labels
             )
-        elif self.head_type == "entity_marker":  # Kept for potential future use
+        elif self.head_type == "entity_marker":
             self.entity_mlp = nn.Sequential(
                 nn.Linear(2 * bert_hidden_size, entity_head_hidden_dim),
                 nn.ReLU(),
@@ -172,14 +150,10 @@ class BERT_CNN(
                 file=sys.stderr,
             )
 
-    def forward(
-        self, input_ids, attention_mask, pos_e1=None, pos_e2=None
-    ):  # pos_e1, pos_e2 kept for signature compatibility
+    def forward(self, input_ids, attention_mask, pos_e1=None, pos_e2=None):
         outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask)
 
         if self.head_type == "simple":
-            # This uses the [CLS] token's representation after being processed by a linear layer and Tanh
-            # which is standard for BertForSequenceClassification
             pooled_output = outputs.pooler_output
             x = self.dropout(pooled_output)
             logits = self.classifier(x)
@@ -197,18 +171,19 @@ class BERT_CNN(
             x = self.dropout(x)
             logits = self.classifier(x)
         elif self.head_type == "entity_marker":
-            if (
-                pos_e1 is None or pos_e2 is None
-            ):  # Should not be used with the new data prep strategy
+            if pos_e1 is None or pos_e2 is None:
                 raise ValueError(
                     "pos_e1 and pos_e2 must be provided for 'entity_marker' head type if it were used."
                 )
             last_hidden_state = outputs.last_hidden_state
-            batch_size = last_hidden_state.size(0)
-            bert_hidden_size = last_hidden_state.size(2)
-            idx_e1 = pos_e1.unsqueeze(1).unsqueeze(2).repeat(1, 1, bert_hidden_size)
+            bert_hidden_size = last_hidden_state.size(2)  # Get hidden_size dynamically
+            idx_e1 = (
+                pos_e1.unsqueeze(1).unsqueeze(2).expand(-1, -1, bert_hidden_size)
+            )  # Use expand
             emb_e1 = torch.gather(last_hidden_state, 1, idx_e1).squeeze(1)
-            idx_e2 = pos_e2.unsqueeze(1).unsqueeze(2).repeat(1, 1, bert_hidden_size)
+            idx_e2 = (
+                pos_e2.unsqueeze(1).unsqueeze(2).expand(-1, -1, bert_hidden_size)
+            )  # Use expand
             emb_e2 = torch.gather(last_hidden_state, 1, idx_e2).squeeze(1)
             concat_emb = torch.cat((emb_e1, emb_e2), dim=1)
             logits = self.entity_mlp(concat_emb)
@@ -230,7 +205,6 @@ def train(args):
     bert_model_name = args.bert_model_name
     tokenizer = AutoTokenizer.from_pretrained(bert_model_name)
 
-    # Add new special tokens for entity markers
     num_added_toks = tokenizer.add_special_tokens(
         {"additional_special_tokens": NEW_SPECIAL_TOKENS}
     )
@@ -251,11 +225,10 @@ def train(args):
         else [3, 4, 5]
     )
 
-    # Ensure head_type is 'simple' for this strategy
     if args.head_type != "simple":
         tqdm.write(
-            f"Warning: This strategy (entity start/end markers) is designed for 'simple' head_type. "
-            f"Current head_type is '{args.head_type}'. Consider using --head_type simple.",
+            f"Warning: Current data processing (entity start/end markers) is primarily designed for 'simple' head_type. "
+            f"You are using '{args.head_type}'. Ensure this is intended.",
             file=sys.stderr,
         )
 
@@ -263,7 +236,7 @@ def train(args):
         pretrained_model_name=bert_model_name,
         num_labels=num_labels,
         dropout_rate=args.dropout_rate,
-        head_type=args.head_type,  # User can still override, but 'simple' is recommended
+        head_type=args.head_type,
         bert_hidden_size=bert_hidden_size,
         cnn_out_channels=args.cnn_out_channels,
         cnn_kernel_sizes=cnn_kernel_sizes_list,
@@ -271,10 +244,7 @@ def train(args):
     )
 
     model.bert.resize_token_embeddings(len(tokenizer))
-    tqdm.write(
-        f"Resized BERT token embeddings to: {len(tokenizer)} to accommodate new special tokens.",
-        file=sys.stderr,
-    )
+    tqdm.write(f"Resized BERT token embeddings to: {len(tokenizer)}", file=sys.stderr)
     model.to(device)
 
     if args.freeze_bert_layers < -1:
@@ -305,12 +275,25 @@ def train(args):
             classes=unique_labels_in_data,
             y=np.array(train_labels),
         )
-        final_class_weights = torch.ones(num_labels, dtype=torch.float)
+        final_class_weights_tensor = torch.ones(num_labels, dtype=torch.float)
         for i, class_idx_in_data in enumerate(unique_labels_in_data):
             if int(class_idx_in_data) < num_labels:
-                final_class_weights[int(class_idx_in_data)] = class_weights_array[i]
-        class_weights = final_class_weights.to(device)
-        tqdm.write(f"Calculated class weights: {class_weights}", file=sys.stderr)
+                final_class_weights_tensor[int(class_idx_in_data)] = (
+                    class_weights_array[i]
+                )
+
+        # Apply weight capping if max_weight is specified and > 0
+        if args.max_class_weight > 0:
+            final_class_weights_tensor = torch.clamp(
+                final_class_weights_tensor, max=args.max_class_weight
+            )
+            tqdm.write(
+                f"Applied class weight capping. Max weight is now {args.max_class_weight}.",
+                file=sys.stderr,
+            )
+
+        class_weights = final_class_weights_tensor.to(device)
+        tqdm.write(f"Final class weights: {class_weights}", file=sys.stderr)
 
     optimizer = AdamW(
         filter(lambda p: p.requires_grad, model.parameters()),
@@ -346,11 +329,8 @@ def train(args):
             ids = batch["input_ids"].to(device)
             mask = batch["attention_mask"].to(device)
             labels = batch["label"].to(device)
-            # pos_e1 and pos_e2 are not used by the 'simple' head with this new data prep
 
             optimizer.zero_grad()
-            # The 'simple' head (and 'cnn') does not require pos_e1, pos_e2 in its forward signature
-            # The 'entity_marker' head did, but we are not aiming for that head type with this data strategy
             logits = model(ids, mask)
 
             loss = criterion(logits, labels)
@@ -437,9 +417,9 @@ def train(args):
     out_dir = args.model_name
     os.makedirs(out_dir, exist_ok=True)
 
-    tokenizer.save_pretrained(out_dir)  # Save tokenizer (with new special tokens)
+    tokenizer.save_pretrained(out_dir)
     torch.save(model.state_dict(), os.path.join(out_dir, "model_state_dict.pt"))
-    codes.save(out_dir + ".idx")  # Save codemaps
+    codes.save(out_dir + ".idx")
     tqdm.write(
         f"Best model state dict, tokenizer, and codemaps saved to {out_dir}",
         file=sys.stderr,
@@ -450,121 +430,102 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Train a BERT-based model for DDI classification with entity start/end markers."
     )
-    # Arguments from previous version
-    parser.add_argument(
-        "train_file",
-        help="Path to the training data file (parsed .pck or XML directory)",
-    )
-    parser.add_argument(
-        "val_file",
-        help="Path to the validation data file (parsed .pck or XML directory)",
-    )
-    parser.add_argument(
-        "model_name", help="Directory name to save the trained model and tokenizer"
-    )
+    parser.add_argument("train_file", help="Path to the training data file")
+    parser.add_argument("val_file", help="Path to the validation data file")
+    parser.add_argument("model_name", help="Directory name to save the trained model")
 
     parser.add_argument(
         "--bert_model_name",
         type=str,
         default="Lianglab/PharmBERT-uncased",
-        help="Base BERT model name (default: Lianglab/PharmBERT-uncased)",
+        help="Base BERT model name",
     )
     parser.add_argument(
-        "--batch_size", type=int, default=16, help="Batch size (default: 16)"
+        "--batch_size", type=int, default=128, help="Batch size"
+    )  # Defaulting to your last successful batch size
+    parser.add_argument(
+        "--lr", type=float, default=1.5e-5, help="Learning rate"
+    )  # Defaulting to your last successful LR
+    parser.add_argument(
+        "--adam_epsilon", type=float, default=1e-8, help="AdamW epsilon"
     )
     parser.add_argument(
-        "--lr", type=float, default=2e-5, help="Learning rate (default: 2e-5)"
-    )
-    parser.add_argument(
-        "--adam_epsilon", type=float, default=1e-8, help="AdamW epsilon (default: 1e-8)"
-    )
-    parser.add_argument(
-        "--weight_decay",
-        type=float,
-        default=0.01,
-        help="AdamW weight_decay (default: 0.01)",
-    )
-    parser.add_argument(
-        "--epochs", type=int, default=10, help="Max epochs (default: 10)"
-    )
+        "--weight_decay", type=float, default=0.03, help="AdamW weight_decay"
+    )  # Defaulting to your last successful WD
+    parser.add_argument("--epochs", type=int, default=10, help="Max epochs")
     parser.add_argument(
         "--max_len",
         type=int,
         default=150,
-        help="Max sequence length for BERT tokenizer (default: 150)",
-    )  # Adjusted based on typical DDI sentence lengths
+        help="Max sequence length for BERT tokenizer",
+    )
     parser.add_argument(
         "--dropout_rate",
         type=float,
         default=0.5,
-        help="Dropout rate for classifier head (default: 0.5)",
+        help="Dropout rate for classifier head",
     )
     parser.add_argument(
-        "--warmup_steps",
-        type=int,
-        default=0,
-        help="Warmup steps for scheduler (default: 0)",
+        "--warmup_steps", type=int, default=0, help="Warmup steps for scheduler"
     )
     parser.add_argument(
         "--max_grad_norm",
         type=float,
         default=1.0,
-        help="Max gradient norm for clipping (default: 1.0)",
+        help="Max gradient norm for clipping",
     )
     parser.add_argument(
-        "--num_workers", type=int, default=0, help="DataLoader num_workers (default: 0)"
+        "--num_workers", type=int, default=0, help="DataLoader num_workers"
     )
 
     parser.add_argument(
-        "--patience",
-        type=int,
-        default=3,
-        help="Early stopping patience (default: 3 epochs)",
+        "--patience", type=int, default=3, help="Early stopping patience"
     )
     parser.add_argument(
-        "--min_delta",
-        type=float,
-        default=0.001,
-        help="Early stopping min_delta (default: 0.001)",
+        "--min_delta", type=float, default=0.001, help="Early stopping min_delta"
     )
 
-    # Head type is now implicitly 'simple' for this strategy, but kept for model class structure
     parser.add_argument(
         "--head_type",
         type=str,
         default="simple",
         choices=["simple", "cnn", "entity_marker"],
-        help="Type of classifier head. For entity start/end marker strategy, 'simple' is recommended. (default: simple)",
+        help="Classifier head type. 'simple' is recommended for entity start/end marker strategy.",
     )
 
-    # CNN and entity_marker head params are not primary for this strategy but kept for model class structure
     parser.add_argument(
         "--cnn_out_channels",
         type=int,
         default=128,
-        help="Output channels for CNN layers if head_type='cnn' (default: 128)",
+        help="CNN output channels if head_type='cnn'",
     )
     parser.add_argument(
         "--cnn_kernel_sizes",
         type=str,
         default="3,4,5",
-        help="Comma-separated kernel sizes for CNN layers if head_type='cnn' (default: 3,4,5)",
+        help="CNN kernel sizes if head_type='cnn'",
     )
     parser.add_argument(
         "--entity_head_hidden_dim",
         type=int,
         default=256,
-        help="Hidden dimension for the MLP in the 'entity_marker' head (default: 256)",
+        help="MLP hidden dim for 'entity_marker' head",
     )
 
     parser.add_argument(
         "--freeze_bert_layers",
         type=int,
-        default=0,
-        help="Number of BERT encoder layers to freeze from the bottom (embeddings also frozen if N > 0). "
-        "0: BERT fully trainable. "
-        "N > 0: Freeze embeddings and first N encoder layers. "
-        "-1: Freeze all BERT parameters. (default: 0)",
+        default=6,  # Defaulting to your last successful freeze setting
+        help="Number of BERT encoder layers to freeze (embeddings also frozen if N > 0). "
+        "0: Fully trainable. N > 0: Freeze embeddings and first N encoder layers. -1: Freeze all BERT.",
+    )
+
+    # New argument for class weight capping
+    parser.add_argument(
+        "--max_class_weight",
+        type=float,
+        default=0,  # Default 0 means no capping
+        help="Maximum value to cap class weights at. Set to 0 for no capping (default: 0). Try values like 10 or 15.",
     )
 
     args = parser.parse_args()
@@ -574,9 +535,8 @@ if __name__ == "__main__":
     if args.head_type != "simple":
         print(
             f"Warning: You are using head_type='{args.head_type}'. "
-            "The current data processing strategy with [E1_START]/[E1_END] markers "
-            "is primarily designed and tested with head_type='simple'. "
-            "Other head types might not behave as expected without further adaptation.",
+            "The current data processing strategy (entity start/end markers) "
+            "is primarily designed for head_type='simple'.",
             file=sys.stderr,
         )
 
