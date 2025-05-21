@@ -211,6 +211,8 @@ def parse_llm_response(response_text):
                 file=sys.stderr,
             )
             return label
+    if label == "advice":
+        return "advise"
     if "no interaction" in text or "no ddi" in text:
         return "none"
 
