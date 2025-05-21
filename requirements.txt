@@ -3,3 +3,7 @@ nltk
 joblib
 requests
 tensorflow[and-cuda]
+bitsandbytes
+accelerate 
+sentencepiece
+torch
