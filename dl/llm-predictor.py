@@ -36,11 +36,210 @@ except ImportError:
 
 # --- DDI Type Definitions (for the prompt) ---
 DDI_DEFINITIONS = {
-    "advise": "An interaction where caution, monitoring, or a change in therapy is advised when the drugs are co-administered (e.g., 'The combination requires regular monitoring').",
-    "effect": "An interaction where a pharmacodynamic or pharmacokinetic effect is described, often altering the drug's efficacy or leading to side effects (e.g., 'Drug A significantly reduces plasma concentrations of Drug B', 'Concurrent use increases risk of bleeding').",
-    "int": "An intended or synergistic interaction where the combination is therapeutically beneficial (e.g., 'Drug A is co-administered with Drug B to enhance its bioavailability').",
-    "mechanism": "An interaction where the underlying biological or chemical mechanism is described (e.g., 'Drug A inhibits the metabolism of Drug B via CYP3A4 inhibition', 'Drug A induces enzymes that metabolize Drug B').",
-    "none": "No functional interaction is described between the two specified drugs in the given context, or the interaction does not fit any of the other categories.",
+    "advise": """
+Definition: the interaction statement carries a recommendation or
+warning—what should or should not be done (contraindications, precautions,
+“use with caution,” etc.).
+Examples:
+– “Nonsteroidal Antiinflammatory Agents: Aspirin is contraindicated
+in patients who are hypersensitive to nonsteroidal anti‐inflammatory
+agents.”
+Entities: (Aspirin ↔ nonsteroidal anti‐inflammatory agents)
+type="advise"
+– “Enteric Coated Aspirin should not be given concurrently with
+antacids…”
+Entities: (Aspirin ↔ antacids)
+type="advise"
+– “Evidence of spontaneous recovery from succinylcholine should be
+observed before the administration of MIVACRON.”
+Entities: (succinylcholine ↔ MIVACRON)
+type="advise"
+    """,
+    "effect": """
+Definition: one drug alters the magnitude of action or
+concentration of another.  These statements use verbs like “increase,”
+“decrease,” “potentiate,” “block,” or “enhance.”
+Examples:
+– “Aspirin may decrease the effects of probenecid, sulfinpyrazone,
+and phenylbutazone.”
+Entities: (Aspirin ↔ probenecid) … (Aspirin ↔ phenylbutazone)
+type="effect"
+– “FLEXERIL may enhance the effects of alcohol, barbiturates, and
+other CNS depressants.”
+Entities: (FLEXERIL ↔ alcohol), (FLEXERIL ↔ barbiturates),
+(FLEXERIL ↔ CNS depressants)
+type="effect"
+– “Prior administration of succinylcholine can potentiate the
+neuromuscular blocking effects of nondepolarizing agents.”
+Entities: (succinylcholine ↔ nondepolarizing agents)
+type="effect"
+    """,
+    "int": """
+Definition: a general notice that an interaction exists (or may
+exist), but without specifying its direction (increase/decrease), mechanism,
+or any particular recommendation.  Often it’s a headline (“X may have
+life‐threatening interactions with Y”) or a “possibility of interaction”
+statement.
+Examples:
+– “FLEXERIL may have life-threatening interactions with MAO
+inhibitors.”
+Entities: (FLEXERIL ↔ MAO inhibitors)
+type="int"
+– “Animal data have suggested the possibility of interaction
+between perindopril and gentamicin.”
+Entities: (perindopril ↔ gentamicin)
+type="int"
+– “Other drugs which may enhance the neuromuscular blocking action
+of nondepolarizing agents such as MIVACRON include certain antibiotics…,
+magnesium salts, lithium, local anesthetics, procainamide, and quinidine.”
+Entities: (nondepolarizing agents ↔ each listed antibiotic, salt,
+etc.)
+type="int"
+    """,
+    "mechanism": """
+Definition: the text explicitly cites the biochemical or
+physiological mechanism behind the interaction (enzyme induction,
+competition for receptors or protein‐binding, altered absorption, etc.).
+Examples:
+– “Phenobarbital: Decreases aspirin effectiveness by enzyme
+induction.”
+Entities: (Phenobarbital ↔ aspirin)
+type="mechanism"
+– “Corticosteroids: Concomitant administration with aspirin may
+increase the risk of gastrointestinal ulceration and may reduce serum
+salicylate levels.”
+    """,
+    "none": """
+1. Definition of “none”
+• Sentences are exhaustively paired across all mentions.
+• In practice “none” covers co-mentions that share a sentence but for which the text does not assert an effect,
+mechanism or advice.
+2. Why it’s so tricky
+– Entity co-occurrence alone is _not_ enough. Two drugs can appear in the same sentence without interacting.
+– Interaction verbs or cautionary language almost always link only one or two specific pairs; _all_ the other pairs in
+that sentence belong to None.
+– Because a single sentence with N mentions leads to N·(N–1)/2 pairs, the vast majority of pairs are “None.”  A naive
+co-occurrence classifier will predict massive false positives.
+3. Walkthrough of real examples
+
+A. Aspirin & Uricosuric Agents
+“Uricosuric Agents: Aspirin may decrease the effects of probenecid, sulfinpyrazone, and phenylbutazone.”
+
+Entities:
+e0 = Uricosuric Agents
+e1 = Aspirin
+e2 = probenecid
+e3 = sulfinpyrazone
+e4 = phenylbutazone
+
+All 10 possible pairs, with their gold labels:
+• (e0,e1) false → none
+• (e0,e2) false → none
+• (e0,e3) false → none
+• (e0,e4) false → none
+• (e1,e2) true type=effect
+• (e1,e3) true type=effect
+• (e1,e4) true type=effect
+• (e2,e3) false → none
+• (e2,e4) false → none
+• (e3,e4) false → none
+
+Here you see 7 “None” vs. 3 “effect” pairs.
+
+B. FLEXERIL & CNS-Drugs
+“FLEXERIL may enhance the effects of alcohol, barbiturates, and other CNS depressants.”
+
+Entities:
+e0 = FLEXERIL
+e1 = alcohol
+e2 = barbiturates
+e3 = CNS depressants
+
+Pairs:
+• (e0,e1) effect
+• (e0,e2) effect
+• (e0,e3) effect
+• (e1,e2) false → none
+• (e1,e3) false → none
+• (e2,e3) false → none
+
+Three None pairs vs. three effect pairs.
+
+C. MIVACRON & a dozen co-drugs
+“Other drugs which may enhance the neuromuscular blocking action of nondepolarizing agents such as MIVACRON include certain
+antibiotics (aminoglycosides, tetracyclines, … colistin, sodium colistimethate), magnesium salts, lithium, local anesthetics,
+procainamide, and quinidine.”
+
+Entities:
+e0 = nondepolarizing agents (the class)
+e1 = aminoglycosides
+e2 = tetracyclines
+…
+e7 = colistin
+e8 = sodium colistimethate
+e9 = magnesium
+e10 = lithium
+e11 = local anesthetics
+e12 = procainamide
+e13 = quinidine
+
+Pairs:
+– (e0, e1…e13)  → all true type=int
+– Every pair among (e1…e13) → false → None
+
+Concretely, C(13,2)=78 None pairs, and 13 “int” pairs.  Without careful signal-detection you’ll drown in those 78 false
+positives.
+
+D. Pyrazolone Derivatives & Aspirin
+“Pyrazolone Derivatives (phenylbutazone, oxyphenbutazone, and possibly dipyrone): Concomitant administration with aspirin may
+increase the risk…”
+
+Entities:
+e0 = Pyrazolone Derivatives
+e1 = phenylbutazone
+e2 = oxyphenbutazone
+e3 = dipyrone
+e4 = aspirin
+
+Pairs (10 total):
+• (e0,e1) false → none
+• (e0,e2) false → none
+• (e0,e3) false → none
+• (e0,e4) effect
+• (e1,e2) false → none
+• (e1,e3) false → none
+• (e1,e4) effect
+• (e2,e3) false → none
+• (e2,e4) effect
+• (e3,e4) effect
+
+Here 6 none vs. 4 effect.
+
+E. Digoxin & ACEON Tablets
+“Digoxin: A controlled study has shown no effect on plasma digoxin concentrations when coadministered with ACEON Tablets, but
+an effect of digoxin on the plasma concentration of perindopril/perindoprilat has not been excluded.”
+
+Entities:
+e0 = Digoxin (the drug name in headline)
+e1 = digoxin (in “plasma digoxin…”)
+e2 = ACEON (brand)
+e3 = digoxin (again, as substrate)
+e4 = perindopril
+e5 = perindoprilat
+
+Pairs (15 total):
+– Only (e3,e4) and (e3,e5) are true type=mechanism
+– All other 13 pairs are false → none
+
+1. Summary & best practice
+– **None** = ddi="false" pairs.
+– They _dominate_ the data—often 70–90% of all pairs in a document.
+– **Tricky**: simple “two drugs in one sentence” features will trigger most of these as false positives.  You _must_
+teach your model to spot the *linguistic cue* (verbs like increase/decrease, “by…”, “contraindicated”, “may interact”, etc.)
+that locally _links_ exactly the right entities, and ignore all other co-mentions.
+– In sequence sentences (e.g. lists of drugs), it is especially easy to over-label every pair—so explicit negative
+examples (“None”) of every unintended pair are essential in training.
+    """,
 }
 VALID_LABELS = ["advise", "effect", "int", "mechanism", "none"]
 DEFAULT_OLLAMA_MODEL = (
@@ -211,8 +410,8 @@ def parse_llm_response(response_text):
                 file=sys.stderr,
             )
             return label
-    if label == "advice":
-        return "advise"
+        if label == "advice":
+            return "advise"
     if "no interaction" in text or "no ddi" in text:
         return "none"
 
