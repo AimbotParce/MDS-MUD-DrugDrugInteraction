@@ -1,28 +1,21 @@
-#!/usr/bin/env
+#!
 #!/usr/bin/env python3
 """
-llm_predictor_ddi_causal.py
+llm_predictor_ddi_ollama.py
 
-This script loads a HuggingFace Causal LLM (e.g., Gemma)
-and uses it to classify drug-drug interaction types. It uses RawDataset
-to load DDI data, where sentences already have <DRUG1> and <DRUG2> placeholders.
+This script uses a locally running LLM via Ollama to classify 
+drug-drug interaction types from XML data using a zero-shot prompting approach.
 
 Dependencies:
-    pip install transformers torch sentencepiece bitsandbytes accelerate tqdm
+    pip install requests tqdm
     Requires dataset.py to be in the same directory or Python path.
+    Ollama installed and running with the specified model downloaded.
 """
 
 import argparse
-import torch
-from transformers import (
-    AutoTokenizer,
-    AutoModelForCausalLM,
-    pipeline,
-    BitsAndBytesConfig,
-)
+import requests  # For making HTTP requests to Ollama API
+import json
 import os
-
-# from xml.dom import minidom # Not needed if using RawDataset
 from tqdm import tqdm
 import sys
 import time
@@ -30,7 +23,8 @@ import time
 # Attempt to import RawDataset from the user's dataset.py
 try:
     from dataset import Dataset as RawDataset
-    from dataset import SentenceDict  # Optional, for type hinting if needed
+
+    # from dataset import SentenceDict # Optional, for type hinting
 except ImportError:
     print(
         "ERROR: Could not import RawDataset from dataset.py. "
@@ -49,116 +43,136 @@ DDI_DEFINITIONS = {
     "none": "No functional interaction is described between the two specified drugs in the given context, or the interaction does not fit any of the other categories.",
 }
 VALID_LABELS = ["advise", "effect", "int", "mechanism", "none"]
-DEFAULT_CAUSAL_MODEL = "google/gemma-2b-it"
+DEFAULT_OLLAMA_MODEL = (
+    "gemma:2b-instruct"  # Example, user should have this model in Ollama
+)
 
 
-class LLMPredictorCausal:
-    def __init__(self, model_name=DEFAULT_CAUSAL_MODEL, quantization=None):
-        self.model_name = model_name
+class LLMPredictorOllama:
+    def __init__(
+        self,
+        ollama_model_name=DEFAULT_OLLAMA_MODEL,
+        ollama_api_url="http://localhost:11434/api/generate",
+    ):
+        self.ollama_model_name = ollama_model_name
+        self.ollama_api_url = ollama_api_url
         print(
-            f"Initializing LLMPredictorCausal with model: {model_name}", file=sys.stderr
+            f"Initializing LLMPredictorOllama with model: {ollama_model_name} at {ollama_api_url}",
+            file=sys.stderr,
         )
-        print(f"Quantization: {quantization}", file=sys.stderr)
-
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-
-        if self.tokenizer.pad_token_id is None:
-            self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
+        # Test connection or model availability (optional)
+        try:
+            # Check if the model exists in ollama list, or just proceed and let predict handle errors
+            # For simplicity, we'll let `predict` handle API errors.
+            pass
+        except Exception as e:
             print(
-                f"Tokenizer pad_token_id set to eos_token_id: {self.tokenizer.eos_token_id}",
+                f"Warning: Could not verify Ollama setup during init: {e}",
                 file=sys.stderr,
             )
 
-        bnb_config = None
-        torch_dtype = torch.float16
-        if quantization == "4bit":
-            bnb_config = BitsAndBytesConfig(
-                load_in_4bit=True,
-                bnb_4bit_use_double_quant=True,
-                bnb_4bit_quant_type="nf4",
-                bnb_4bit_compute_dtype=torch.bfloat16,
-            )
-            torch_dtype = torch.bfloat16
-            print("Loading model with 4-bit quantization.", file=sys.stderr)
-        elif quantization == "8bit":
-            bnb_config = BitsAndBytesConfig(load_in_8bit=True)
-            print("Loading model with 8-bit quantization.", file=sys.stderr)
-        else:
-            print(f"Loading model in {torch_dtype} precision.", file=sys.stderr)
+    def predict(
+        self,
+        prompt: str,
+        max_new_tokens: int = 10,
+        temperature: float = 0.1,
+        top_p: float = 0.9,
+    ) -> str:
+        """
+        Generate a prediction for the given prompt using the Ollama API.
+        """
+        payload = {
+            "model": self.ollama_model_name,
+            "prompt": prompt,
+            "stream": False,  # Get the full response at once
+            "options": {
+                "num_predict": max_new_tokens,  # Ollama's way to limit output length
+                "temperature": temperature,
+                "top_p": top_p,
+            },
+        }
 
-        self.model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            quantization_config=bnb_config,
-            torch_dtype=torch_dtype,
-            device_map="auto",
-            trust_remote_code=True,
-        )
+        # Adjust options for deterministic output if temperature is very low
+        if temperature <= 0.001:
+            payload["options"]["temperature"] = 0.0  # Explicitly greedy
+            if "top_p" in payload["options"]:  # top_p not used with temp 0
+                del payload["options"]["top_p"]
+            # Ollama might also have a specific way to ensure greedy, temp 0 is usually it.
+
+        try:
+            response = requests.post(self.ollama_api_url, json=payload)
+            response.raise_for_status()  # Raise an exception for HTTP errors (4xx or 5xx)
+            response_data = response.json()
+
+            generated_text = response_data.get("response", "").strip()
+            return generated_text
+
+        except requests.exceptions.RequestException as e:
+            print(f"Error calling Ollama API: {e}", file=sys.stderr)
+            return ""  # Return empty string on error
+        except json.JSONDecodeError:
+            print(
+                f"Error decoding JSON response from Ollama: {response.text}",
+                file=sys.stderr,
+            )
+            return ""
+
+
+def parse_xml_for_llm(data_input_path):
+    # This function can be reused from the previous script (llm_predictor_ddi_causal.py)
+    files_to_process = []
+    if os.path.isdir(data_input_path):
+        for fname in sorted(os.listdir(data_input_path)):
+            if fname.lower().endswith(".xml"):
+                files_to_process.append(os.path.join(data_input_path, fname))
+    elif os.path.isfile(data_input_path) and data_input_path.lower().endswith(".xml"):
+        files_to_process.append(data_input_path)
+    else:
         print(
-            f"Model loaded. Device of model params: {next(self.model.parameters()).device}",
+            f"Error: Input path '{data_input_path}' is not a valid directory or .xml file.",
             file=sys.stderr,
         )
+        yield from ()  # Return an empty generator
+        return
 
-        self.pipeline = pipeline(
-            "text-generation", model=self.model, tokenizer=self.tokenizer
-        )
-        print("Text-generation pipeline initialized.", file=sys.stderr)
-
-    def predict(self, prompt: str, max_new_tokens: int = 10, **generate_kwargs) -> str:
-        final_generate_kwargs = {
-            "temperature": 0.1,  # Low temperature for more deterministic output
-            "top_p": 0.9,
-            "do_sample": False,  # Default to greedy for classification
-            "pad_token_id": self.tokenizer.eos_token_id,
-        }
-        final_generate_kwargs.update(generate_kwargs)
-
-        if (
-            final_generate_kwargs.get("temperature", 0) > 0.001
-        ):  # Check if temperature is meaningfully > 0
-            final_generate_kwargs["do_sample"] = True
-        else:
-            final_generate_kwargs["do_sample"] = False
-            final_generate_kwargs.pop("top_p", None)
-            final_generate_kwargs.pop("temperature", None)
-
-        outputs = self.pipeline(
-            prompt, max_new_tokens=max_new_tokens, **final_generate_kwargs
-        )
-
-        full_generated_text = outputs[0]["generated_text"]
-        if full_generated_text.startswith(prompt):  # Common case
-            return full_generated_text[len(prompt) :].strip()
-        else:
-            # Fallback if prompt is not exactly at the start
-            # This can happen if the model adds a BOS token or reformats slightly
-            # We try to return the part that looks like the answer
-            # Often, the answer is the last significant part of the string.
-            lines = full_generated_text.splitlines()
-            potential_answer = lines[-1].strip() if lines else ""
-            # If the potential answer is very long, it might be the model repeating parts of the prompt.
-            # This is a heuristic.
-            if (
-                len(potential_answer) > max_new_tokens * 2
-                and len(potential_answer) > len(prompt) / 2
-            ):
-                print(
-                    f"Warning: Generated text did not start with prompt and fallback is long. Prompt: '{prompt[:100]}...' Output: '{full_generated_text[:200]}...'",
-                    file=sys.stderr,
-                )
-                # Try to find the instruction part of the prompt in the output
-                instruction_phrase = "The DDI type is: "
-                idx = full_generated_text.rfind(instruction_phrase)
-                if idx != -1:
-                    return full_generated_text[idx + len(instruction_phrase) :].strip()
-                return potential_answer  # Or just return the raw output for manual inspection
-            return potential_answer
+    for filepath in files_to_process:
+        try:
+            doc = minidom.parse(filepath)
+            sentences = doc.getElementsByTagName("sentence")
+            for s_node in sentences:
+                s_id = s_node.getAttribute("id")
+                original_sentence_text = s_node.getAttribute("text")
+                entities_in_sentence = {
+                    e.getAttribute("id"): e.getAttribute("text")
+                    for e in s_node.getElementsByTagName("entity")
+                }
+                pairs = s_node.getElementsByTagName("pair")
+                for p_node in pairs:
+                    e1_id, e2_id = p_node.getAttribute("e1"), p_node.getAttribute("e2")
+                    drug1_text, drug2_text = entities_in_sentence.get(
+                        e1_id
+                    ), entities_in_sentence.get(e2_id)
+                    if drug1_text and drug2_text:
+                        yield {
+                            "sid": s_id,
+                            "e1_id": e1_id,
+                            "e2_id": e2_id,
+                            "sentence_text": original_sentence_text,  # Not used in this version's prompt directly
+                            "drug1_text": drug1_text,  # Not used in this version's prompt directly
+                            "drug2_text": drug2_text,  # Not used in this version's prompt directly
+                            "s_obj": s_node,  # Pass the sentence object from RawDataset
+                        }
+        except Exception as e:
+            print(f"Error parsing file {filepath}: {e}", file=sys.stderr)
 
 
-def construct_ddi_prompt_for_causal_lm_with_placeholders(sentence_with_placeholders):
+def construct_ddi_prompt_for_ollama(sentence_with_placeholders):
     """
-    Constructs the DDI classification prompt for a Causal LM,
+    Constructs the DDI classification prompt for an Ollama Causal LM,
     using a sentence that already contains <DRUG1> and <DRUG2> placeholders.
     """
+    # Ollama models (especially instruct-tuned ones) usually respond well to clear instructions.
+    # The prompt structure used for Gemma should work well.
     prompt = (
         "You are an expert biomedical text analyst. Your task is to classify the type of drug-drug interaction (DDI) "
         "between Drug 1 (represented as '<DRUG1>') and Drug 2 (represented as '<DRUG2>') in the given sentence. "
@@ -209,13 +223,19 @@ def parse_llm_response(response_text):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="LLM-based DDI classifier using Causal LM and RawDataset."
+        description="LLM-based DDI classifier using Ollama and RawDataset."
     )
     parser.add_argument(
-        "--model_name",
+        "--ollama_model_name",
         type=str,
-        default=DEFAULT_CAUSAL_MODEL,
-        help=f"HuggingFace Causal LM name (default: {DEFAULT_CAUSAL_MODEL})",
+        default=DEFAULT_OLLAMA_MODEL,
+        help=f"Ollama model tag (e.g., 'gemma:2b-instruct', 'llama3:8b-instruct') (default: {DEFAULT_OLLAMA_MODEL})",
+    )
+    parser.add_argument(
+        "--ollama_api_url",
+        type=str,
+        default="http://localhost:11434/api/generate",
+        help="Ollama API endpoint URL (default: http://localhost:11434/api/generate)",
     )
     parser.add_argument(
         "--input_data_path",
@@ -233,7 +253,7 @@ def main():
         "--max_new_tokens",
         type=int,
         default=10,
-        help="Maximum number of new tokens for the DDI type label (default: 10)",
+        help="Maximum number of new tokens for the DDI type label (Ollama's num_predict) (default: 10)",
     )
     parser.add_argument(
         "--limit",
@@ -242,46 +262,39 @@ def main():
         help="Limit the number of examples to process (for testing).",
     )
     parser.add_argument(
-        "--quantization",
-        type=str,
-        default=None,
-        choices=["4bit", "8bit"],
-        help="Enable quantization: '4bit' or '8bit'. Requires bitsandbytes and accelerate.",
-    )
-    parser.add_argument(
         "--temperature",
         type=float,
         default=0.0,
-        help="Temperature for LLM generation (0.0 for greedy, >0 for sampling).",
+        help="Temperature for Ollama generation (0.0 for greedy, >0 for sampling).",
     )
     parser.add_argument(
         "--top_p",
         type=float,
         default=0.9,
-        help="Top-p (nucleus) sampling for LLM generation (used if temperature > 0).",
+        help="Top-p (nucleus) sampling for Ollama generation (used if temperature > 0).",
     )
     parser.add_argument(
         "--generation_delay",
         type=float,
-        default=0.0,
-        help="Delay in seconds between LLM inferences (default: 0.0).",
+        default=0.1,  # Small delay by default
+        help="Delay in seconds between Ollama API calls (default: 0.1).",
     )
 
     args = parser.parse_args()
 
-    predictor = LLMPredictorCausal(
-        model_name=args.model_name, quantization=args.quantization
+    predictor = LLMPredictorOllama(
+        ollama_model_name=args.ollama_model_name, ollama_api_url=args.ollama_api_url
     )
 
-    # Load data using RawDataset
     print(
         f"Loading DDI data from: {args.input_data_path} using RawDataset...",
         file=sys.stderr,
     )
     try:
+        # RawDataset loads all data into memory with list(raw_data_loader.sentences())
+        # This is fine for moderately sized datasets.
         raw_data_loader = RawDataset(args.input_data_path)
-        # Convert generator to list to apply limit and use tqdm
-        all_examples = list(raw_data_loader.sentences())
+        all_examples = list(raw_data_loader.sentences())  # SentenceDict items
     except Exception as e:
         print(
             f"Error loading data with RawDataset from '{args.input_data_path}': {e}",
@@ -297,32 +310,28 @@ def main():
         return
 
     print(
-        f"Starting DDI classification for {len(all_examples)} examples using {args.model_name}...",
+        f"Starting DDI classification for {len(all_examples)} examples using Ollama model {args.ollama_model_name}...",
         file=sys.stderr,
     )
 
-    generate_kwargs = {
-        "temperature": args.temperature,
-        "top_p": args.top_p,
-    }
-
     with open(args.output_file, "w") as outf:
         for example_sentence_dict in tqdm(
-            all_examples, desc=f"Classifying with {os.path.basename(args.model_name)}"
+            all_examples, desc=f"Classifying with {args.ollama_model_name}"
         ):
             # example_sentence_dict is a SentenceDict from RawDataset
-            # s['sent'] is a list of TokenDicts, e.g., [{'form': 'word1'}, {'form': '<DRUG1>'}, ...]
+            # example_sentence_dict['sent'] is a list of TokenDicts, e.g., [{'form': 'word1'}, {'form': '<DRUG1>'}, ...]
 
             sentence_with_placeholders = " ".join(
                 [token["form"] for token in example_sentence_dict["sent"]]
             )
 
-            prompt_text = construct_ddi_prompt_for_causal_lm_with_placeholders(
-                sentence_with_placeholders
-            )
+            prompt_text = construct_ddi_prompt_for_ollama(sentence_with_placeholders)
 
             llm_response_text = predictor.predict(
-                prompt_text, max_new_tokens=args.max_new_tokens, **generate_kwargs
+                prompt_text,
+                max_new_tokens=args.max_new_tokens,
+                temperature=args.temperature,
+                top_p=args.top_p,
             )
 
             predicted_label = parse_llm_response(llm_response_text)
@@ -335,7 +344,10 @@ def main():
             if args.generation_delay > 0:
                 time.sleep(args.generation_delay)
 
-    print(f"LLM-based DDI predictions saved to {args.output_file}", file=sys.stderr)
+    print(
+        f"LLM-based DDI predictions (Ollama) saved to {args.output_file}",
+        file=sys.stderr,
+    )
 
 
 if __name__ == "__main__":
